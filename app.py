@@ -535,20 +535,24 @@ with tab4:
                            "`heatwave.py`의 GOOGLE_SHEET_CSV_URL을 채우면 실제 제출값으로 바뀝니다.", icon="⚠️")
             incident = HW.incident_status()
             if not incident.empty:
-                incident["이슈"] = (incident["환자수"] > 0) | (incident["작업조정중지"] > 0)
-                incident = incident.sort_values(["이슈", "환자수", "작업조정중지"], ascending=[False, False, False])
-                display_df = incident[["branch", "환자수", "작업조정중지", "휴식부여분", "출처", "제출시각"]].rename(
-                    columns={"branch": "지사", "휴식부여분": "휴식(분)"})
+                incident["이슈"] = (incident["환자수"] > 0) | (incident["작업조정"] > 0) | (incident["작업중지"] > 0)
+                incident = incident.sort_values(
+                    ["이슈", "환자수", "작업중지", "작업조정"], ascending=[False, False, False, False])
+                display_df = incident[
+                    ["branch", "환자수", "작업조정", "작업중지", "중지상세", "제출 현황", "제출시각"]
+                ].rename(columns={"branch": "지사"})
+                display_df["환자수"] = display_df["환자수"].map(lambda n: f"{int(n)}명")
 
                 def _highlight_issue(row):
-                    if row["환자수"] > 0 or row["작업조정중지"] > 0:
+                    if row["환자수"] != "0명" or row["작업조정"] > 0 or row["작업중지"] > 0:
                         return ["background-color:#c81d25; color:white"] * len(row)
                     return [""] * len(row)
 
                 st.dataframe(display_df.style.apply(_highlight_issue, axis=1),
                              use_container_width=True, hide_index=True)
                 st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
-                           "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음.")
+                           "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음. "
+                           "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분).")
 
             st.markdown("---")
             st.subheader("🚦 지사별 실시간 현황")

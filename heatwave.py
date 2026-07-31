@@ -300,10 +300,9 @@ def daily_max_by_branch(obs: pd.DataFrame) -> pd.DataFrame:
 
 
 def incident_placeholder() -> pd.DataFrame:
-    """온열질환 환자·작업조정/중지·휴식부여 현황 — 자리표시자(전부 0/기본값).
+    """온열질환 환자·작업조정·작업중지 현황 — 자리표시자(전부 0/빈값).
 
-    현장에서 이 수치를 입력할 경로(모바일 폼 등)가 아직 없다. 입력 경로가 생기면 이 함수를
-    실제 DB 조회로 교체하면 되고, 호출부(app.py)는 컬럼 구조가 같은 한 수정할 필요가 없다.
+    현장에서 이 수치를 입력할 경로(구글폼)가 없던 지사는 이 기본값으로 채워진다.
     """
     cities = load_branch_cities()
     if cities.empty:
@@ -312,8 +311,9 @@ def incident_placeholder() -> pd.DataFrame:
     return pd.DataFrame({
         "branch": branches,
         "환자수": [0] * len(branches),
-        "작업조정중지": [0] * len(branches),
-        "휴식부여분": [20] * len(branches),
+        "작업조정": [0] * len(branches),
+        "작업중지": [0] * len(branches),
+        "중지상세": [""] * len(branches),
     })
 
 
@@ -366,41 +366,48 @@ def load_incident_reports() -> pd.DataFrame | None:
             col_map[col] = "branch"
         elif "환자" in c:
             col_map[col] = "환자수"
-        elif "조정" in c or "중지" in c:
-            col_map[col] = "작업조정중지"
-        elif "휴식" in c:
-            col_map[col] = "휴식부여분"
+        elif "조정" in c and "건" in c:
+            col_map[col] = "작업조정"
+        elif "중지" in c and "건" in c:
+            col_map[col] = "작업중지"
+        elif "상세" in c:
+            col_map[col] = "중지상세"
     df = df.rename(columns=col_map)
 
-    needed = {"timestamp", "branch", "환자수", "작업조정중지", "휴식부여분"}
+    needed = {"timestamp", "branch", "환자수", "작업조정", "작업중지"}
     if not needed.issubset(df.columns):
         return None
+    if "중지상세" not in df.columns:
+        df["중지상세"] = ""
 
     df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
     df = df.dropna(subset=["branch", "timestamp"])
     if df.empty:
         return df
+    df["중지상세"] = df["중지상세"].fillna("")
     return df.sort_values("timestamp").groupby("branch", as_index=False).last()[
-        ["branch", "환자수", "작업조정중지", "휴식부여분", "timestamp"]]
+        ["branch", "환자수", "작업조정", "작업중지", "중지상세", "timestamp"]]
 
 
 def incident_status() -> pd.DataFrame:
-    """지사별 온열질환·조치 현황: 구글폼 제출값이 있으면 그 값, 없으면 기본값(0/0/20)."""
+    """지사별 온열질환·조치 현황: 구글폼 제출값이 있으면 그 값, 없으면 기본값(전부 0)."""
     base = incident_placeholder()
     if base.empty:
         return base
 
     reports = load_incident_reports()
     if reports is None or reports.empty:
-        base["출처"] = "기본값(미제출)"
+        base["제출 현황"] = "기본값(미제출)"
         base["제출시각"] = pd.NaT
         return base
 
     merged = base.merge(reports, on="branch", how="left", suffixes=("_기본", ""))
-    for col in ["환자수", "작업조정중지", "휴식부여분"]:
+    for col in ["환자수", "작업조정", "작업중지"]:
         merged[col] = merged[col].where(merged[col].notna(), merged[f"{col}_기본"])
         merged = merged.drop(columns=[f"{col}_기본"])
-    merged["출처"] = merged["timestamp"].notna().map({True: "제출됨", False: "기본값(미제출)"})
+    merged["중지상세"] = merged["중지상세"].where(merged["중지상세"].notna(), merged["중지상세_기본"])
+    merged = merged.drop(columns=["중지상세_기본"])
+    merged["제출 현황"] = merged["timestamp"].notna().map({True: "제출됨", False: "기본값(미제출)"})
     merged = merged.rename(columns={"timestamp": "제출시각"})
     return merged
 

@@ -1,0 +1,47 @@
+# --- data 폴더: 기본적으로 전부 제외, 배포된 앱이 실제로 읽는 마스킹된 파일만 허용 ---
+# (raw_점검_누적.xlsx, pii_mapping.json, 점검_clean.csv, 사고_clean.csv 등 실명이 들어간
+#  원본/중간산출물은 절대 커밋되지 않도록 화이트리스트 방식으로 관리한다)
+data/*
+!data/점검_masked.csv
+!data/사고_masked.csv
+!data/점검_LLM하이브리드.csv
+
+# --- 폭염 대응 탭이 참조하는 번들 데이터 (heatwave_data/) ---
+# 온도를 조져보자 프로젝트의 최신 스냅샷을 sync_heatwave_data.py로 복사해 넣는 폴더.
+# alerts.db는 자주 바뀌므로 커밋하되, 혹시 모를 스테이징 잔여물은 아래에서 관리.
+
+# --- Python ---
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- Streamlit 비밀값(비밀번호 등) — 배포 시 Streamlit Cloud 대시보드에 별도 등록, 저장소엔 절대 커밋 금지 ---
+.streamlit/secrets.toml
+
+# --- 이 저장소와 무관한 로컬 실험 산출물(스크린샷 캡처 도구 등, 앱 실행에 불필요) ---
+node_modules/
+report_shots/
+package.json
+package-lock.json
+build_report.js
+capture_insight.py
+capture_report.py
+capture_shots.py
+verify_bottom.py
+verify_shot.py
+
+# --- 앱이 로드하지 않는 1회성 데이터 라벨링/분석 스크립트·중간산출물 ---
+classify_words.py
+extract_words.py
+hybrid_severity.py
+pilot_severity.py
+direct_judgments_batch*.json
+cleaning_report.txt
+streamlit_log.txt
+
+# --- 로컬 경로·내부 검토용 문서(외부 배포 저장소에 불필요) ---
+PROJECT_BRIEFING_FOR_REVIEW.md
+*.docx
+
+# --- Claude Code 로컬 도구 설정(앱과 무관) ---
+.claude/

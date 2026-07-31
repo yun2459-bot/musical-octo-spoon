@@ -1,0 +1,635 @@
+# -*- coding: utf-8 -*-
+"""
+AI 기반 현장 안전 데이터 통합 분석 대시보드 (프로토타입)
+- 구성: ① 전사 현황  ② 지사 상세  (2개 탭, 안전관리자 친화적 단순화)
+실행:  streamlit run app.py
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+import matplotlib.pyplot as plt
+from matplotlib import font_manager as fm
+import plotly.express as px
+import plotly.graph_objects as go
+from wordcloud import WordCloud
+
+import scoring as S
+import heatwave as HW
+
+# ------------------------------------------------------------------ 기본 설정
+st.set_page_config(page_title="현장안전 통합분석 대시보드", page_icon="🦺", layout="wide")
+
+
+def _check_password() -> bool:
+    """APP_PASSWORD(secrets)가 설정돼 있으면 맞는 비밀번호를 입력해야 통과.
+
+    secrets 자체가 없는(로컬에서 아직 설정 안 한) 환경에서는 개발 편의상 그냥 통과시킨다 —
+    배포판(Streamlit Cloud)엔 반드시 secrets로 APP_PASSWORD를 등록해야 실제로 보호된다.
+    """
+    try:
+        required = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        required = ""
+    if not required:
+        return True
+    if st.session_state.get("_authed"):
+        return True
+
+    st.title("🦺 현장안전 통합분석 대시보드")
+    pw = st.text_input("접속 비밀번호", type="password")
+    if pw:
+        if pw == required:
+            st.session_state["_authed"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 올바르지 않습니다.")
+    return False
+
+
+if not _check_password():
+    st.stop()
+
+# 배포 환경(Streamlit Cloud 등 리눅스)엔 윈도우 폰트가 없으므로 저장소에 번들된 폰트를 우선 쓰고,
+# 로컬 윈도우 개발환경에서는 맑은 고딕을 그대로 쓴다.
+_FONT_CANDIDATES = [
+    Path(__file__).parent / "fonts" / "NanumGothic.ttf",
+    Path(r"C:\Windows\Fonts\malgun.ttf"),
+]
+FONT_PATH = next((str(p) for p in _FONT_CANDIDATES if p.exists()), None)
+if FONT_PATH:
+    try:
+        fm.fontManager.addfont(FONT_PATH)
+        plt.rcParams["font.family"] = fm.FontProperties(fname=FONT_PATH).get_name()
+        plt.rcParams["axes.unicode_minus"] = False
+    except Exception:
+        FONT_PATH = None
+
+BLUE = "#4C78A8"
+
+
+@st.cache_data
+def load():
+    return S.load_data()
+
+insp, acc = load()
+INSP_BRANCHES = sorted(insp["지사"].unique())
+
+# ------------------------------------------------------------------ 사이드바
+st.sidebar.title("🦺 현장안전 통합분석")
+st.sidebar.caption("세방(주) · 프로토타입")
+
+period_opt = st.sidebar.radio("분석 기간", ["최근 90일", "최근 180일", "전체 기간"], index=2)
+end = insp["점검일자"].max()
+if period_opt == "최근 90일":
+    period = (end - pd.Timedelta(days=90), end)
+elif period_opt == "최근 180일":
+    period = (end - pd.Timedelta(days=180), end)
+else:
+    period = None
+
+SEV_COL_MAP = {"규칙기반(라벨)": "심각도점수", "LLM 하이브리드(맥락반영·파일럿)": "LLM심각도"}
+sev_label = st.sidebar.radio(
+    "심각도 산정 기준", list(SEV_COL_MAP.keys()),
+    help="LLM 하이브리드는 195건 직접 의미판정 + 590건 키워드 맥락보정을 결합한 파일럿 결과입니다.")
+SEV_COL = SEV_COL_MAP[sev_label]
+
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    f"데이터: 점검 {len(insp):,}건 ({insp['점검일자'].min().date()}~{insp['점검일자'].max().date()}) · "
+    f"인적재해 이력 {int((acc['재해성격']=='인적재해').sum()):,}건")
+
+SYNC_SUMMARY_PATH = Path(__file__).parent / "data" / "_last_sync_summary.json"
+
+# gsafety.kr 로그인 자격증명이 있는 로컬 환경에서만 동기화 버튼을 보여준다.
+# 클라우드 배포판은 이 자격증명도, Downloads 폴더의 원본 파일도, 사내망 접근도 없어
+# 눌러도 100% 실패하므로 아예 노출하지 않는다.
+if os.environ.get("GSAFETY_ID") and os.environ.get("GSAFETY_PW"):
+    if st.sidebar.button("🔄 최신 점검 데이터 동기화", use_container_width=True,
+                          help="gsafety.kr에서 지사 점검 데이터를 가져와 누적본에 반영합니다(수 분 소요)"):
+        with st.sidebar:
+            with st.spinner("사이트 로그인 → 신규 데이터 조회 → 정제·마스킹 재실행 중..."):
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).parent / "sync_gsafety.py")],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                )
+        if result.returncode == 0:
+            summary = {}
+            if SYNC_SUMMARY_PATH.exists():
+                summary = json.loads(SYNC_SUMMARY_PATH.read_text(encoding="utf-8"))
+            st.session_state["sync_result"] = ("success", summary)
+            st.cache_data.clear()
+        else:
+            st.session_state["sync_result"] = ("error", (result.stdout + result.stderr)[-2000:])
+        st.rerun()
+
+if "sync_result" in st.session_state:
+    kind, payload = st.session_state.pop("sync_result")
+    with st.sidebar:
+        if kind == "error":
+            st.error("동기화 실패")
+            st.code(payload, language=None)
+        else:
+            by_branch = payload.get("by_branch", {})
+            if not by_branch:
+                st.info("동기화 완료 — 신규 데이터 없음(이미 최신 상태)")
+            else:
+                st.success(f"동기화 완료 — 신규 {payload.get('total_added', 0)}건 반영")
+                rows = []
+                for branch, cnt in sorted(by_branch.items(), key=lambda x: -x[1]):
+                    b_acc = acc[acc["지사"] == branch]
+                    rows.append({
+                        "지사": branch,
+                        "신규 점검활동": cnt,
+                        "인적재해(누적)": int((b_acc["재해성격"] == "인적재해").sum()),
+                        "재물·차량사고(누적)": int((b_acc["재해성격"] == "재물·차량사고").sum()),
+                    })
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+# ------------------------------------------------------------------ 공통 계산
+ri = S.branch_risk_index(insp, period, severity_col=SEV_COL)
+
+# ================================================================== 헤더
+st.title("현장 안전 통합 상황판")
+_mode = "🧪 LLM 하이브리드(파일럿)" if SEV_COL == "LLM심각도" else "📐 규칙기반(라벨)"
+st.caption(f"심각도 기준: **{_mode}** · 분석기간: {period_opt}")
+
+tab1, tab2, tab3, tab4 = st.tabs(["📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석", "🌡️ 폭염 대응"])
+
+# ================================================================== TAB1 전사 현황
+with tab1:
+    st.success(
+        "🧭 **이 지수를 어떻게 볼까요?** — 위험지수는 지사를 평가·처벌하는 점수가 **아닙니다.** "
+        "점검을 활발하고 꼼꼼하게 한 지사일수록 위험을 많이 발굴해 지수가 높게 나올 수 있으며, "
+        "이는 **안전관리 활동이 적정하게 이뤄지고 있다는 긍정적 신호**로 해석합니다. "
+        "본사는 이 값을 자원 배분(교육·예산·인력)의 우선순위 참고자료로만 사용합니다.",
+        icon="🧭")
+
+    if SEV_COL == "LLM심각도":
+        st.info(
+            "🧪 **LLM 하이브리드 모드** — 지적내용의 문맥(작업 위치·상황)까지 반영한 파일럿 결과입니다. "
+            "규칙기반 대비 당진지사가 상위로, 부산지사가 하위로 순위가 조정됩니다.", icon="🧪")
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        NORM = {"총량": "위험지수", "사업장당": "사업장당지수", "안전관리자당": "관리자당지수"}
+        basis_label = st.radio("보정 기준", list(NORM.keys()), horizontal=True,
+                               help="지사마다 사업장·안전관리자 수가 달라, 규모로 나눈 값도 함께 볼 수 있습니다.")
+        basis = NORM[basis_label]
+        ri_sorted = ri.sort_values(basis, ascending=True)
+        fig = px.bar(ri_sorted, x=basis, y="지사", orientation="h",
+                     text=basis, height=430,
+                     hover_data=["지적건수", "평균심각도", "안전관리자수", "사업장수"])
+        fig.update_traces(marker_color=BLUE, textposition="outside", cliponaxis=False)
+        fig.update_layout(margin=dict(l=0, r=30, t=30, b=0),
+                          xaxis_title="", yaxis_title="",
+                          title=f"지사별 위험·점검활동 지수 ({basis_label})")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("높다고 위험한 지사가 아니라, 위험을 많이 발굴했거나 규모가 큰 지사일 수 있습니다. "
+                   "오른쪽 '양 vs 질'로 나눠서 보세요.")
+    with c2:
+        st.markdown("**점검의 '양'(건수) vs '질'(평균 심각도)**")
+        fig = px.scatter(ri, x="지적건수", y="평균심각도", size="가중점수",
+                         color="평균심각도", color_continuous_scale="Blues",
+                         text="지사", height=430, size_max=45)
+        fig.update_traces(textposition="top center")
+        fig.add_vline(x=ri["지적건수"].median(), line_dash="dot", line_color="gray")
+        fig.add_hline(y=ri["평균심각도"].median(), line_dash="dot", line_color="gray")
+        fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
+                          xaxis_title="점검 건수(활동량)", yaxis_title="평균 심각도(위험 정도)")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("오른쪽 = 점검 활발(바람직) · 위쪽 = 심각한 지적 비중 높음. "
+                   "'점검을 많이 한 것'과 '위험이 심각한 것'은 다릅니다.")
+
+    with st.expander("📋 지사별 상세 표 (건수·규모·지수)"):
+        st.dataframe(
+            ri[["지사", "지적건수", "평균심각도", "안전관리자수", "사업장수",
+                "위험지수", "사업장당지수", "관리자당지수"]],
+            use_container_width=True, hide_index=True)
+
+# ================================================================== TAB2 지사 상세
+# 워드클라우드 불용어 — 문법 조각 · 점검 '과정' 메타어 · 지명
+_STOP = ("있 없 및 등 위 시 후 전 중 내 외 관련 대한 하여 위해 인한 인해 따른 통해 실시 확인 조치 필요 요함 요망 "
+         "발생 상태 작업 현장 근로자 사용 부분 경우 이동 진행 완료 요청 가능 대해 으로 에서 하는 되는 방지 미흡 "
+         "이나 또는 지사 내용 사항 여부 당사 소속 운전 원인 결과 예정 이상 우측 좌측 일부 해당 예방 조치요망 "
+         "위험 안전 관리 오늘 하기 되어 있는 없는 통한 대비 이후 이전 위한 우려 존재 가능성 있음 없음 등의 등을 "
+         "등이 대하여 관하여 인하여 위하여 하도록 하며 하고 이고 이며 되며 따라 아래 다음 지적 코칭 개선 점검 "
+         "확인함 실시함 조치함 요청함 점검일 일지 관리자 담당 지금 현문 세트 서류 인원 주변 사무동 게시 위치 "
+         "당시 부착 재해 저하 상시 수시 조치예정 조치완료 미실시 "
+         "강원 경남 경북 경인 광양 당진 목포 부산 삼천포 전북 울산 본사 인천 경기 포항 군산 동해 창원")
+STOPWORDS = set(_STOP.split())
+
+
+def tokenize(texts):
+    cnt = {}
+    for t in texts:
+        for w in re.findall(r"[가-힣]{2,}", str(t)):
+            if w in STOPWORDS or w.endswith("지사"):
+                continue
+            cnt[w] = cnt.get(w, 0) + 1
+    return cnt
+
+
+def growth_wordcloud(df_branch, col, max_words=30):
+    """급증 위험요인=빨강. 최근 60일 vs 이전 60일 빈도 증가율로 색상. 단어 수 제한으로 식별성 확보."""
+    end_ = df_branch["점검일자"].max()
+    recent = df_branch[df_branch["점검일자"] >= end_ - pd.Timedelta(days=60)]
+    prior = df_branch[(df_branch["점검일자"] < end_ - pd.Timedelta(days=60)) &
+                      (df_branch["점검일자"] >= end_ - pd.Timedelta(days=120))]
+    fr, fp, total = tokenize(recent[col]), tokenize(prior[col]), tokenize(df_branch[col])
+    if not total:
+        return None
+    growth = {w: (fr.get(w, 0) - fp.get(w, 0)) / (fp.get(w, 0) + 1) for w in total}
+
+    def color_func(word, **kw):
+        g = growth.get(word, 0)
+        if g >= 1.0:   return "#d62728"
+        if g > 0:      return "#e8862c"
+        return "#7f8fa6"
+
+    wc = WordCloud(font_path=FONT_PATH, background_color="white",
+                   width=720, height=420, max_words=max_words, color_func=color_func,
+                   prefer_horizontal=0.95, margin=6).generate_from_frequencies(total)
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    ax.imshow(wc, interpolation="bilinear"); ax.axis("off")
+    fig.tight_layout(pad=0)
+    return fig
+
+
+with tab2:
+    sel = st.selectbox("지사 선택", ri["지사"].tolist())
+    dfb = insp[insp["지사"] == sel]
+    rrow = ri[ri["지사"] == sel].iloc[0]
+
+    cA, cB = st.columns([1, 2])
+    with cA:
+        val = float(rrow["위험지수"])
+        gfig = go.Figure(go.Indicator(
+            mode="gauge+number", value=val, title={"text": f"{sel} 위험·활동 지수"},
+            gauge={"axis": {"range": [0, 100]},
+                   "bar": {"color": BLUE},
+                   "steps": [{"range": [0, 50], "color": "#eef3f8"},
+                             {"range": [50, 80], "color": "#dbe6f1"},
+                             {"range": [80, 100], "color": "#c3d5e8"}]}))
+        gfig.update_layout(height=260, margin=dict(l=10, r=10, t=50, b=10))
+        st.plotly_chart(gfig, use_container_width=True)
+        st.caption(f"점검 {int(rrow['지적건수'])}건 · 평균 심각도 {rrow['평균심각도']:.2f} · "
+                   f"사업장 {int(rrow['사업장수'])}곳 · 안전관리자 {int(rrow['안전관리자수'])}명")
+        st.markdown("**위험분류별 지적 분포**")
+        vc = dfb[dfb["위험분류"].isin(S.PHYSICAL_HAZARDS)]["위험분류"].value_counts()
+        st.bar_chart(vc, height=240, color=BLUE)
+    with cB:
+        st.markdown("**동적 워드클라우드** — 🔴급증 · 🟠증가 · ⚪안정 (최근 60일 대비) · 상위 30개 단어")
+        w1, w2 = st.columns(2)
+        with w1:
+            st.markdown("🔎 **점검(코칭)내용** — 무엇을 지적했나")
+            fig = growth_wordcloud(dfb, "지적내용_평문")
+            if fig is not None:
+                st.pyplot(fig)
+            else:
+                st.info("텍스트 부족")
+        with w2:
+            st.markdown("🛠️ **조치내용** — 어떻게 개선했나")
+            fig = growth_wordcloud(dfb, "조치내용_평문")
+            if fig is not None:
+                st.pyplot(fig)
+            else:
+                st.info("텍스트 부족")
+
+    st.markdown("---")
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.subheader("🎯 점검 사각지대")
+        st.caption("과거 인적재해가 있었으나 최근 점검에서 다루지 않은 위험분류 (질병성 제외)")
+        bs = S.blind_spots(insp, acc, exclude_disease=True)
+        bsb = bs[bs["지사"] == sel] if not bs.empty else bs
+        if bsb is None or bsb.empty:
+            st.success("최근 점검에서 놓친 과거재해 위험분류가 없습니다.")
+        else:
+            st.dataframe(bsb[["위험분류", "과거재해", "최근점검", "상태"]],
+                         use_container_width=True, hide_index=True, height=220)
+    with cc2:
+        st.subheader("📜 과거 인적재해 이력")
+        pa = acc[(acc["지사"] == sel) & (acc["재해성격"] == "인적재해")]
+        if pa.empty:
+            st.info("인적재해 이력 없음")
+        else:
+            st.caption(f"총 {len(pa)}건 (산재 {int((pa['산재구분']=='산재').sum())} · "
+                       f"공상 {int((pa['산재구분']=='공상').sum())})")
+            hist = pa.groupby("위험분류").size().sort_values(ascending=False).reset_index(name="건수")
+            st.dataframe(hist, use_container_width=True, hide_index=True, height=220)
+
+    # ---- 분류 재검토 제안 (AI 텍스트 분석) ----
+    st.markdown("---")
+    st.subheader("🔧 위험분류 재검토 제안 (AI 텍스트 분석)")
+    st.caption("LLM이 지적내용을 읽고, 규칙기반으로 붙은 위험분류가 실제 내용과 맞지 않아 보이는 사례를 찾은 결과입니다. "
+               "같은 유형(예: 안전모 미착용)이 지사마다 다르게 분류되는 문제를 발견할 수 있습니다.")
+    mis_all = insp[insp["위험분류_재검토"].notna()].copy()
+    if not mis_all.empty:
+        mis_all["지적내용"] = mis_all["지적내용_평문"].astype(str).str.replace(r"\([^)]*\)", "", regex=True)
+    mis_b = mis_all[mis_all["지사"] == sel] if not mis_all.empty else mis_all
+    if mis_b is None or mis_b.empty:
+        st.info(f"{sel}은 현재 재검토 후보가 없습니다. (아래 전사 목록에서 다른 지사 사례를 볼 수 있습니다)")
+    else:
+        st.write(f"**{sel}** 재검토 후보 {len(mis_b)}건")
+        st.dataframe(
+            mis_b[["위험분류", "위험분류_재검토", "지적내용"]].rename(
+                columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
+            use_container_width=True, hide_index=True)
+    if not mis_all.empty:
+        with st.expander(f"🔎 전사 재검토 후보 전체 {len(mis_all)}건 — 지사 간 분류 일관성 점검"):
+            st.dataframe(
+                mis_all[["지사", "위험분류", "위험분류_재검토", "지적내용"]].rename(
+                    columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
+                use_container_width=True, hide_index=True)
+
+# ================================================================== TAB3 점검 편향분석
+with tab3:
+    st.info(
+        "이 지사(안전관리자)의 점검이 **특정 위험에만 쏠려 있지 않은지**, 그리고 **실제 사고가 나는 유형을 "
+        "잘 점검하고 있는지**를 자체 점검하는 화면입니다. 잘잘못을 가리는 것이 아니라 사각지대를 스스로 "
+        "발견하기 위한 참고 지표입니다.", icon="🔍")
+    st.caption("※ 근골격 등 질병성(지연발현) 재해는 현장 실시간 점검으로 포착이 어려워 편향분석에서 제외합니다.")
+
+    st.subheader("점검자별 위험분류 다양성 지수")
+    st.caption("지수가 낮을수록 특정 위험분류에 편중된 점검입니다. 막대를 클릭하거나 아래에서 점검자를 선택하면 상세가 열립니다.")
+    bias = S.inspector_bias(insp)
+    figb = px.bar(bias, x="다양성지수", y="점검자", orientation="h", color="다양성지수",
+                  color_continuous_scale="RdYlGn", range_color=[0.6, 1.0],
+                  hover_data=["지사", "점검건수", "최다위험", "최다비중", "다룬위험종류"], height=420)
+    figb.update_layout(yaxis={"categoryorder": "total descending"},
+                       coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0))
+    ev = st.plotly_chart(figb, use_container_width=True, on_select="rerun", key="bias_chart")
+
+    picked = None
+    try:
+        pts = ev.selection.points if ev and ev.selection else []
+        if pts:
+            picked = pts[0].get("y")
+    except Exception:
+        picked = None
+    names = bias["점검자"].tolist()
+    idx = names.index(picked) if picked in names else 0
+    who = st.selectbox("점검자 상세 보기", names, index=idx, key="bias_pick")
+
+    det = S.inspector_detail(insp, who)
+    brow = bias[bias["점검자"] == who].iloc[0]
+    st.markdown(f"#### 👷 {who} · {det['지사']} · 점검 {det['점검건수']}건 · "
+                f"다양성지수 {brow['다양성지수']} (최다: {brow['최다위험']} {brow['최다비중']:.0f}%)")
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        st.markdown("**어떤 위험을 점검했나** (위험분류 분포)")
+        st.bar_chart(det["위험분류분포"], color=BLUE, height=240)
+    with dc2:
+        st.markdown("**어느 사업장에서 점검했나** (사업장 분포)")
+        st.bar_chart(det["사업장분포"], color=BLUE, height=240)
+    if det["소외위험"]:
+        st.warning(f"🔎 **{who}**님이 최근 한 번도 다루지 않은 물리위험: **{', '.join(det['소외위험'])}** "
+                   "→ 다음 점검 시 의식적으로 확인 권장")
+    else:
+        st.success(f"{who}님은 주요 물리위험을 고르게 점검하고 있습니다.")
+
+    st.markdown("---")
+    st.subheader("지사별 갭분석 — 점검 vs 실제 사고")
+    st.caption("선택한 지사의 위험분류별 [점검 비중] vs [사고 비중]. 사고비중이 점검비중보다 크면 "
+               "그 지사의 점검이 실제 위험을 놓치고 있을 수 있습니다. (질병성 제외)")
+    gsel = st.selectbox("지사 선택", INSP_BRANCHES,
+                        index=INSP_BRANCHES.index(sel) if sel in INSP_BRANCHES else 0, key="gap_branch")
+    gb = S.coverage_gap_by_branch(insp, acc, gsel, exclude_disease=True)
+    if gb.empty or gb[["점검비중", "사고비중"]].to_numpy().sum() == 0:
+        st.info(f"{gsel}: 비교할 사고 이력 또는 점검 데이터가 부족합니다.")
+    else:
+        gm = gb.reset_index().rename(columns={"index": "위험분류"}).melt(
+            id_vars="위험분류", value_vars=["점검비중", "사고비중"],
+            var_name="구분", value_name="비중")
+        figg = px.bar(gm, x="위험분류", y="비중", color="구분", barmode="group", height=380,
+                      color_discrete_map={"점검비중": "#4c78a8", "사고비중": "#e45756"})
+        figg.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend_title="", yaxis_title="비중(%)")
+        st.plotly_chart(figg, use_container_width=True)
+        over = gb[gb["갭(사고-점검)"] > 5]
+        if not over.empty:
+            st.warning("⚠️ **" + gsel + "**에서 사고 대비 점검이 부족한 위험분류: "
+                       + ", ".join(f"**{h}**(+{gb.loc[h,'갭(사고-점검)']:.0f}%p)" for h in over.index))
+
+# ================================================================== TAB4 폭염 대응
+with tab4:
+    st.info(
+        "기상청 API허브 실측 데이터를 기반으로 항만 사업장별 체감온도를 자동 관제한 결과입니다. "
+        "`온도를 조져보자` 파이프라인이 주기적으로 실행되어야 데이터가 계속 쌓입니다.", icon="🌡️")
+
+    if not HW.available():
+        st.warning("아직 관측 데이터가 없습니다. `온도를 조져보자` 프로젝트의 main.py를 먼저 실행해주세요.")
+    else:
+        obs = HW.load_observations()
+        notif = HW.load_notifications()
+
+        if obs.empty:
+            st.info("아직 쌓인 관측 데이터가 없습니다. 스케줄러가 최소 1회 이상 실행된 뒤 다시 확인해주세요.")
+        else:
+            clusters = HW.map_clusters(obs)
+
+            st.subheader("🗺️ 지사별 폭염 현황 지도")
+            svg_uri = HW.korea_svg_data_uri()
+            if svg_uri is None or not clusters:
+                st.info("지도 배경 SVG 또는 사업장 좌표가 없습니다. `Map_of_South_Korea-blank.svg`와 "
+                        "`config/sites.yaml`을 확인해주세요.")
+            else:
+                # 지사 사무실은 실제 좌표에 큰 원으로, 규모 있는(사업장 2개+) 부속 사업장은 사무실
+                # 원 옆에 붙는 작은 막대로 표시한다 — 부속 막대는 위치가 정확하지 않아도 되므로
+                # 실제 좌표 대신 사무실 원에 종속된 형태로 붙여서 "딸린 사업장" 느낌을 준다.
+                pins_html = []
+                for c in clusters:
+                    left, top = HW.latlon_to_svg_pct(c["lat"], c["lon"])
+                    color = HW.level_color(c["level"])
+                    est_prefix = "~" if c.get("is_estimate") else ""
+                    badge = f'{est_prefix}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
+                    if c["has_data"] and c.get("is_estimate"):
+                        detail = (f'{c["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
+                                   f'{c["estimate_source"]} {c["estimate_km"]:.0f}km 값 사용)')
+                    elif c["has_data"]:
+                        detail = f'{c["apparent_temp"]:.1f}℃ ({c["level"] or "정상"})'
+                    else:
+                        detail = "관측 데이터 없음"
+                    title = f'{c["branch"]} {c["city"]}(사무실) · {detail}'
+                    border_style = "2px dashed white" if c.get("is_estimate") else "2px solid white"
+
+                    satellites_html = ""
+                    for s in c["satellites"]:
+                        s_color = HW.level_color(s["level"])
+                        s_est = "~" if s.get("is_estimate") else ""
+                        s_badge = f'{s_est}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
+                        if s["has_data"] and s.get("is_estimate"):
+                            s_detail = (f'{s["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
+                                         f'{s["estimate_source"]} {s["estimate_km"]:.0f}km 값 사용)')
+                        elif s["has_data"]:
+                            s_detail = f'{s["apparent_temp"]:.1f}℃ ({s["level"] or "정상"})'
+                        else:
+                            s_detail = "관측 데이터 없음"
+                        s_title = f'{c["branch"]} {s["city"]}(부속, {s["site_count"]}개소) · {s_detail}'
+                        s_border = "1.5px dashed white" if s.get("is_estimate") else "1.5px solid white"
+                        satellites_html += (
+                            f'<div style="display:flex; flex-direction:column; align-items:center; margin-left:3px;">'
+                            f'<div title="{s_title}" style="width:20px; height:30px; background:{s_color}; '
+                            f'border-radius:4px 4px 0 0; display:flex; align-items:center; justify-content:center; '
+                            f'font-size:8px; color:white; font-weight:700; border:{s_border}; '
+                            f'border-bottom:none; box-shadow:0 1px 3px rgba(0,0,0,.3);">{s_badge}</div>'
+                            f'<div style="font-size:7px; color:#444; background:rgba(255,255,255,.85); '
+                            f'padding:0 2px; white-space:nowrap; border-radius:0 0 3px 3px;">{s["city"]}</div>'
+                            f'</div>'
+                        )
+
+                    pins_html.append(
+                        f'<div style="position:absolute; left:{left:.3f}%; top:{top:.3f}%; '
+                        f'transform:translate(-50%,-100%); text-align:center; font-family:sans-serif; z-index:2;">'
+                        f'<div style="display:flex; align-items:flex-end; justify-content:center;">'
+                        f'<div title="{title}" style="background:{color}; color:white; border-radius:50%; '
+                        f'width:42px; height:42px; display:flex; align-items:center; justify-content:center; '
+                        f'font-size:14px; font-weight:700; border:{border_style}; '
+                        f'box-shadow:0 1px 4px rgba(0,0,0,.35); flex-shrink:0;">{badge}</div>'
+                        f'{satellites_html}'
+                        f'</div>'
+                        f'<div style="font-size:10px; margin-top:2px; color:#111; font-weight:700; '
+                        f'background:rgba(255,255,255,.85); border-radius:4px; padding:0 3px; white-space:nowrap;">'
+                        f'{c["branch"]}</div>'
+                        f'</div>'
+                    )
+
+                # SVG viewBox가 800x1200(비율 2:3)이므로, 래퍼도 정확히 같은 비율의 고정 픽셀
+                # 크기로 만들어야 left/top(%) 핀 좌표가 이미지 위에 정확히 겹친다.
+                map_w, map_h = 560, 840
+                map_html = (
+                    '<html><body style="margin:0;">'
+                    f'<div style="position:relative; width:{map_w}px; height:{map_h}px; margin:0 auto;">'
+                    f'<img src="{svg_uri}" style="position:absolute; top:0; left:0; width:{map_w}px; '
+                    f'height:{map_h}px; display:block;" />'
+                    f'{"".join(pins_html)}'
+                    '</div></body></html>'
+                )
+                components.html(map_html, height=map_h + 20, scrolling=False)
+
+                leg1, leg2, leg3, leg4 = st.columns(4)
+                for col, (lvl, label) in zip(
+                    (leg1, leg2, leg3, leg4),
+                    [(None, "정상"), ("주의", "주의 33℃+"), ("경고", "경고 35℃+"), ("위험", "위험 38℃+")],
+                ):
+                    col.markdown(
+                        f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+                        f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}',
+                        unsafe_allow_html=True)
+                st.caption("큰 원 = 지사 사무실(실제 위치). 옆에 붙은 작은 막대 = 규모 있는(사업장 2곳 이상) 또는 "
+                           "수동 지정한 부속 사업장(위치는 사무실에 종속 표시, 실제 좌표 아님). "
+                           "점선 테두리 + \"~숫자\" = 그 도시 자체 관측지점이 없어 가장 가까운 실측 지점 값으로 "
+                           "추정한 온도(호버하면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다.")
+
+            st.markdown("---")
+            st.subheader("🚨 지사별 온열질환·조치 현황")
+            if not HW.GOOGLE_SHEET_CSV_URL:
+                st.warning("⚠️ 구글폼 응답 시트가 아직 연결되지 않아 전부 기본값입니다. "
+                           "`heatwave.py`의 GOOGLE_SHEET_CSV_URL을 채우면 실제 제출값으로 바뀝니다.", icon="⚠️")
+            incident = HW.incident_status()
+            if not incident.empty:
+                incident["이슈"] = (incident["환자수"] > 0) | (incident["작업조정중지"] > 0)
+                incident = incident.sort_values(["이슈", "환자수", "작업조정중지"], ascending=[False, False, False])
+                display_df = incident[["branch", "환자수", "작업조정중지", "휴식부여분", "출처", "제출시각"]].rename(
+                    columns={"branch": "지사", "휴식부여분": "휴식(분)"})
+
+                def _highlight_issue(row):
+                    if row["환자수"] > 0 or row["작업조정중지"] > 0:
+                        return ["background-color:#c81d25; color:white"] * len(row)
+                    return [""] * len(row)
+
+                st.dataframe(display_df.style.apply(_highlight_issue, axis=1),
+                             use_container_width=True, hide_index=True)
+                st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
+                           "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음.")
+
+            st.markdown("---")
+            st.subheader("🚦 지사별 실시간 현황")
+            summary = HW.branch_summary(obs)
+            data_summary = summary[summary["has_data"]] if not summary.empty else summary
+            if data_summary.empty:
+                st.info("관측지점이 확정된 지사가 아직 없습니다.")
+            else:
+                rows_of_cards = [data_summary.iloc[i:i + 4] for i in range(0, len(data_summary), 4)]
+                for chunk in rows_of_cards:
+                    cols = st.columns(4)
+                    for col, row in zip(cols, chunk.itertuples()):
+                        level = row.level or "정상"
+                        color = HW.level_color(row.level)
+                        source_city = row.estimate_source.split(" ")[-1] if row.is_estimate else row.worst_city
+                        with col:
+                            st.markdown(
+                                f"""
+                                <div style="border:1px solid #e2e2e2; border-radius:10px; padding:14px;
+                                            text-align:center; height:168px; box-sizing:border-box;
+                                            display:flex; flex-direction:column; justify-content:space-between;">
+                                  <div>
+                                    <div style="font-size:15px; font-weight:700;">{row.branch}</div>
+                                    <div style="font-size:11px; color:#999; margin-bottom:4px; word-break:keep-all;">
+                                      {'/'.join(row.cities)}
+                                    </div>
+                                    <div style="font-size:26px; font-weight:700; margin:4px 0; white-space:nowrap;">
+                                      {row.apparent_temp:.1f}°C
+                                    </div>
+                                    <div style="display:inline-block; padding:3px 10px; border-radius:12px;
+                                                background:{color}; color:white; font-size:13px;">{level}</div>
+                                  </div>
+                                  <div style="font-size:11px; color:#888;">
+                                    기준: {source_city}<br>{row.observed_at.strftime('%m-%d %H:%M')}
+                                  </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    for col in cols[len(chunk):]:
+                        col.empty()
+            st.caption("체감온도 기준(세방 SAFETY TF): 주의 33℃ · 경고 35℃ · 위험 38℃ · 배지 온도는 지사 내 도시 중 최고값입니다.")
+
+            st.markdown("---")
+            st.subheader("📈 일별 최고 체감온도 추이 (지사별)")
+            dmax = HW.daily_max_by_branch(obs)
+            dmax = dmax.sort_values("date")
+            dmax["date_str"] = dmax["date"].astype(str)
+            dmax["단계"] = dmax["apparent_temp"].apply(HW.temp_level).fillna("정상")
+            dmax["라벨"] = dmax["apparent_temp"].map(lambda t: f"{t:.1f}°")
+            level_colors = {"정상": HW.NORMAL_COLOR, **HW.LEVEL_COLOR}
+            fig_temp = px.bar(dmax, x="branch", y="apparent_temp", color="단계", facet_col="date_str", height=380,
+                               category_orders={"단계": ["정상", *HW.LEVEL_ORDER], "branch": HW.branch_order()},
+                               color_discrete_map=level_colors, text="라벨")
+            fig_temp.update_traces(textposition="outside", textfont=dict(size=13, color="white"), cliponaxis=False)
+            for lvl, y in [("주의", 33), ("경고", 35), ("위험", 38)]:
+                fig_temp.add_hline(y=y, line_dash="dot", line_color=HW.LEVEL_COLOR[lvl],
+                                    annotation_text=lvl, annotation_position="right")
+            fig_temp.update_layout(margin=dict(l=0, r=0, t=40, b=0), yaxis_title="체감온도(°C)", legend_title="단계")
+            fig_temp.for_each_annotation(lambda a: a.update(text=a.text.replace("date_str=", "")))
+            fig_temp.update_xaxes(title="")
+            fig_temp.update_yaxes(range=[25, 40])
+            st.plotly_chart(fig_temp, use_container_width=True)
+
+            st.markdown("---")
+            st.subheader("🌡️ 지사별 폭염 단계 발생 현황(주차별)")
+            if notif.empty:
+                st.info("아직 발령된 경보가 없습니다.")
+            else:
+                weekly = HW.weekly_alert_counts_by_branch(notif)
+                weekly["week"] = weekly["week"].astype(str)
+                fig_alert = px.bar(weekly, x="branch", y="발령횟수", color="level", barmode="stack",
+                                    facet_col="week", height=380,
+                                    category_orders={"level": HW.LEVEL_ORDER, "branch": HW.branch_order()},
+                                    color_discrete_map=HW.LEVEL_COLOR)
+                fig_alert.update_layout(margin=dict(l=0, r=0, t=40, b=0), yaxis_title="발령 건수", legend_title="단계")
+                fig_alert.for_each_annotation(lambda a: a.update(text=a.text.replace("week=", "")))
+                fig_alert.update_xaxes(title="")
+                st.plotly_chart(fig_alert, use_container_width=True)
+
+                with st.expander("📋 최근 발령 이력 전체"):
+                    st.dataframe(
+                        notif.sort_values("sent_at", ascending=False)[["branch", "site", "level", "apparent_temp", "sent_at", "status"]],
+                        use_container_width=True, hide_index=True)

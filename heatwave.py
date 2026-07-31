@@ -412,6 +412,65 @@ def incident_status() -> pd.DataFrame:
     return merged
 
 
+_DRIVE_ID_PAT = re.compile(r"(?:id=|/d/)([a-zA-Z0-9_-]{20,})")
+
+
+def _drive_thumbnail_url(link: str, size: int = 500) -> str | None:
+    """구글 드라이브 공유 링크 -> 바로 <img src=...>로 쓸 수 있는 썸네일 URL.
+
+    파일이 "링크가 있는 모든 사용자 - 뷰어"로 공유돼 있어야 인증 없이 열린다.
+    """
+    m = _DRIVE_ID_PAT.search(str(link))
+    if not m:
+        return None
+    return f"https://drive.google.com/thumbnail?id={m.group(1)}&sz=w{size}"
+
+
+def load_photo_reports() -> pd.DataFrame:
+    """구글폼 "현장 사진" 업로드 문항 응답 -> (branch, photo_url, timestamp) 목록.
+
+    사진 문항이 아직 폼에 없거나 제출이 없으면 빈 DataFrame을 반환한다(호출부는
+    이 경우 캐러셀을 안전하게 숨긴다).
+    """
+    cols = ["branch", "photo_url", "timestamp"]
+    if not GOOGLE_SHEET_CSV_URL:
+        return pd.DataFrame(columns=cols)
+    try:
+        df = pd.read_csv(GOOGLE_SHEET_CSV_URL)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+
+    photo_col = branch_col = ts_col = None
+    for col in df.columns:
+        c = str(col)
+        if "사진" in c or "이미지" in c or "photo" in c.lower():
+            photo_col = col
+        elif c.strip() == "지사":
+            branch_col = col
+        elif "타임스탬프" in c or "timestamp" in c.lower():
+            ts_col = col
+    if photo_col is None or branch_col is None or ts_col is None:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for _, r in df.iterrows():
+        raw = r.get(photo_col)
+        if pd.isna(raw) or not str(raw).strip():
+            continue
+        ts = _parse_google_timestamp(r.get(ts_col))
+        if pd.isna(ts):
+            continue
+        # 한 문항에 여러 장 업로드하면 콤마로 링크가 이어져 온다.
+        for link in str(raw).split(","):
+            url = _drive_thumbnail_url(link.strip())
+            if url:
+                rows.append({"branch": r.get(branch_col), "photo_url": url, "timestamp": ts})
+
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame(rows).sort_values("timestamp", ascending=False).reset_index(drop=True)
+
+
 def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
     if notif.empty:
         return notif

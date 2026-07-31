@@ -420,10 +420,6 @@ with tab3:
 
 # ================================================================== TAB4 폭염 대응
 with tab4:
-    st.info(
-        "기상청 API허브 실측 데이터를 기반으로 항만 사업장별 체감온도를 자동 관제한 결과입니다. "
-        "`온도를 조져보자` 파이프라인이 주기적으로 실행되어야 데이터가 계속 쌓입니다.", icon="🌡️")
-
     if not HW.available():
         st.warning("아직 관측 데이터가 없습니다. `온도를 조져보자` 프로젝트의 main.py를 먼저 실행해주세요.")
     else:
@@ -558,6 +554,39 @@ with tab4:
                 st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
                            "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음. "
                            "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분).")
+
+            photos = HW.load_photo_reports()
+            if not photos.empty:
+                st.markdown("---")
+                st.subheader("📸 현장 활동 사진")
+                cards = "".join(
+                    f'<div style="flex:0 0 auto; width:220px; scroll-snap-align:start;">'
+                    f'<img src="{p.photo_url}" style="width:220px; height:220px; object-fit:cover; '
+                    f'border-radius:8px; display:block;" />'
+                    f'<div style="font-size:12px; color:#333; background:rgba(255,255,255,.9); '
+                    f'padding:4px 6px; border-radius:0 0 8px 8px;">'
+                    f'{p.branch} · {p.timestamp.strftime("%m-%d %H:%M")}</div>'
+                    f'</div>'
+                    for p in photos.itertuples()
+                )
+                carousel_html = f"""
+                <html><body style="margin:0;">
+                <div style="position:relative; display:flex; align-items:center; font-family:sans-serif;">
+                  <button onclick="document.getElementById('photoTrack').scrollBy({{left:-700,behavior:'smooth'}})"
+                          style="border:none; background:#eee; border-radius:50%; width:32px; height:32px;
+                                 cursor:pointer; flex-shrink:0; margin-right:6px; font-size:16px;">◀</button>
+                  <div id="photoTrack" style="display:flex; gap:12px; overflow-x:auto; scroll-snap-type:x mandatory;
+                       scroll-behavior:smooth; padding:4px;">
+                    {cards}
+                  </div>
+                  <button onclick="document.getElementById('photoTrack').scrollBy({{left:700,behavior:'smooth'}})"
+                          style="border:none; background:#eee; border-radius:50%; width:32px; height:32px;
+                                 cursor:pointer; flex-shrink:0; margin-left:6px; font-size:16px;">▶</button>
+                </div>
+                </body></html>
+                """
+                components.html(carousel_html, height=270, scrolling=False)
+                st.caption("사진 아래 캡션 = 올린 지사 · 제출시각. 좌우 화살표 또는 마우스 드래그/트랙패드로 넘길 수 있습니다.")
 
             st.markdown("---")
             st.subheader("🚦 지사별 실시간 현황")

@@ -25,11 +25,14 @@ ALERTS_DB_PATH = HEATWAVE_DATA_DIR / "alerts.db"
 SITES_YAML_PATH = HEATWAVE_DATA_DIR / "sites.yaml"
 KOREA_SVG_PATH = HEATWAVE_DATA_DIR / "Map_of_South_Korea-blank.svg"
 
-# 구글폼 응답 시트를 "파일 > 웹에 게시 > CSV"로 발행한 링크. 비어있으면 기본값만 표시한다.
+# 온열질환·조치 현황 구글폼 응답 시트를 "파일 > 웹에 게시 > CSV"로 발행한 링크.
 GOOGLE_SHEET_CSV_URL = (
     "https://docs.google.com/spreadsheets/d/e/2PACX-1vQd-qH5R5USiu7_UgJuZOqKokyUtVtKSwzJQ2HzNY48th5USyr_V9FtXgEyI094andE7laDaKH6Q5EO/"
     "pub?gid=705177955&single=true&output=csv"
 )
+
+# 현장 사진 전용 구글폼(별도 폼) 응답 시트의 "웹에 게시 > CSV" 링크. 폼을 만들고 채워 넣는다.
+PHOTO_SHEET_CSV_URL = ""
 
 LEVEL_ORDER = ["주의", "경고", "위험"]
 LEVEL_COLOR = {"주의": "#f4d35e", "경고": "#f2a154", "위험": "#c81d25"}
@@ -427,16 +430,16 @@ def _drive_thumbnail_url(link: str, size: int = 500) -> str | None:
 
 
 def load_photo_reports() -> pd.DataFrame:
-    """구글폼 "현장 사진" 업로드 문항 응답 -> (branch, photo_url, timestamp) 목록.
+    """현장 사진 전용 구글폼(별도 폼) 응답 -> (branch, photo_url, timestamp) 목록.
 
-    사진 문항이 아직 폼에 없거나 제출이 없으면 빈 DataFrame을 반환한다(호출부는
-    이 경우 캐러셀을 안전하게 숨긴다).
+    PHOTO_SHEET_CSV_URL이 비어있거나 제출이 없으면 빈 DataFrame을 반환한다
+    (호출부는 이 경우 캐러셀을 안전하게 숨긴다).
     """
     cols = ["branch", "photo_url", "timestamp"]
-    if not GOOGLE_SHEET_CSV_URL:
+    if not PHOTO_SHEET_CSV_URL:
         return pd.DataFrame(columns=cols)
     try:
-        df = pd.read_csv(GOOGLE_SHEET_CSV_URL)
+        df = pd.read_csv(PHOTO_SHEET_CSV_URL)
     except Exception:
         return pd.DataFrame(columns=cols)
 

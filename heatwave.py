@@ -31,8 +31,11 @@ GOOGLE_SHEET_CSV_URL = (
     "pub?gid=705177955&single=true&output=csv"
 )
 
-# 현장 사진 전용 구글폼(별도 폼) 응답 시트의 "웹에 게시 > CSV" 링크. 폼을 만들고 채워 넣는다.
-PHOTO_SHEET_CSV_URL = ""
+# 현장 사진 전용 구글폼(별도 폼) 응답 시트를 "파일 > 웹에 게시 > CSV"로 발행한 링크.
+PHOTO_SHEET_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vSYVutauCiy_ontPnVoGqHhWVNTddj_AeVO37miWMtHdt9K7Fhe-I4vTyMe1VolOQcLAU0WOafOG90F/"
+    "pub?gid=1033239324&single=true&output=csv"
+)
 
 LEVEL_ORDER = ["주의", "경고", "위험"]
 LEVEL_COLOR = {"주의": "#f4d35e", "경고": "#f2a154", "위험": "#c81d25"}

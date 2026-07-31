@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import math
+import re
 import sqlite3
 from pathlib import Path
 
@@ -316,6 +317,33 @@ def incident_placeholder() -> pd.DataFrame:
     })
 
 
+_KO_TS_PAT = re.compile(
+    r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\s+(오전|오후)\s+(\d{1,2}):(\d{1,2}):(\d{1,2})"
+)
+
+
+def _parse_google_timestamp(raw) -> pd.Timestamp:
+    """구글폼 응답 시트의 기본 타임스탬프 형식("2026. 7. 31 오후 4:10:16")을 파싱한다.
+
+    pandas.to_datetime은 이 한국어 오전/오후 형식을 못 읽고 그냥 NaT로 버리므로
+    (응답이 있어도 조용히 사라짐) 직접 정규식으로 파싱한다. 이 형식이 아니면
+    일반 pandas 파서로 한 번 더 시도한다(형식이 바뀌는 경우 대비).
+    """
+    m = _KO_TS_PAT.search(str(raw))
+    if m:
+        year, month, day, ampm, hour, minute, second = m.groups()
+        hour = int(hour)
+        if ampm == "오후" and hour != 12:
+            hour += 12
+        elif ampm == "오전" and hour == 12:
+            hour = 0
+        try:
+            return pd.Timestamp(int(year), int(month), int(day), hour, int(minute), int(second))
+        except ValueError:
+            return pd.NaT
+    return pd.to_datetime(raw, errors="coerce")
+
+
 def load_incident_reports() -> pd.DataFrame | None:
     """구글폼 응답 시트(웹에 게시 CSV)를 읽어 지사별 최신 제출값만 남긴다.
 
@@ -348,7 +376,7 @@ def load_incident_reports() -> pd.DataFrame | None:
     if not needed.issubset(df.columns):
         return None
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
     df = df.dropna(subset=["branch", "timestamp"])
     if df.empty:
         return df

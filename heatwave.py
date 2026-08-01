@@ -328,13 +328,13 @@ def _week_start(d) -> pd.Timestamp:
 def this_and_last_week() -> tuple[pd.Timestamp, pd.Timestamp]:
     """(왼쪽="지난주" 라벨용, 오른쪽="이번주" 라벨용) 두 주차의 월요일 날짜.
 
-    2026-08-01(토) 기준으로 파일럿 데이터가 전부 이번 달력주(7/27~8/2)에 몰려 있어서,
-    "지금까지 쌓인 데이터=왼쪽, 다가오는 새 주=오른쪽(비어있음)"으로 보이도록
-    현재 달력주를 왼쪽에, 다음 달력주(다가오는 월요일 시작)를 오른쪽에 고정한다.
+    진짜 달력 기준(오늘이 속한 주 = 이번주, 그 전 주 = 지난주)이라 매주 월요일마다
+    사람 손 안 대도 저절로 굴러간다. 파일럿 시작 직후처럼 지난주에 데이터가 없으면
+    왼쪽 패널이 빈 채로 뜨는 게 정상이며, 한 주가 지나면 자동으로 채워진다.
     """
     today = pd.Timestamp.now().normalize()
-    current_week = _week_start(today)
-    return current_week, current_week + pd.Timedelta(days=7)
+    this_week = _week_start(today)
+    return this_week - pd.Timedelta(days=7), this_week
 
 
 def weekly_max_by_branch(obs: pd.DataFrame) -> pd.DataFrame:

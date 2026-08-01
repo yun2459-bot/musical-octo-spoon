@@ -465,18 +465,23 @@ def load_incident_reports() -> pd.DataFrame | None:
 def patient_summary() -> dict:
     """온열질환 환자수 전사 합계: 26년(올해) 누적, 금일.
 
-    구글폼 "환자수"는 지사가 그날 보고하는 신규 발생 건수라는 전제로, 누적은 올해
-    제출분 전체를 합산하고 금일은 오늘 날짜 제출분만 합산한다. 전년도(25년) 비교치는
+    구글폼 문항이 "금일 누적 온열질환 의심 환자 수"(그날의 최종 누적값, 신규 발생분이
+    아님)이므로, 같은 지사가 하루에 여러 번 제출해도 그날의 마지막 제출값만 그날의
+    대표값으로 쓴다 — 전부 더하면 같은 하루가 중복 합산된다. 연간 누적은 지사·일자별
+    대표값을 모두 합산, 금일은 오늘 날짜의 대표값만 합산한다. 전년도(25년) 비교치는
     온열질환 신고 체계가 이번 시즌에 처음 도입돼 시스템 내에 원천 데이터가 없다.
     """
     raw = load_incident_reports_raw()
     if raw is None or raw.empty:
         return {"cumulative": 0, "today": 0}
     now = pd.Timestamp.now()
-    year_rows = raw[raw["timestamp"].dt.year == now.year]
-    cumulative = int(year_rows["환자수"].sum())
-    today_rows = year_rows[year_rows["timestamp"].dt.normalize() == now.normalize()]
-    today = int(today_rows["환자수"].sum())
+    year_rows = raw[raw["timestamp"].dt.year == now.year].copy()
+    year_rows["date"] = year_rows["timestamp"].dt.normalize()
+    daily_last = (
+        year_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
+    )
+    cumulative = int(daily_last["환자수"].sum())
+    today = int(daily_last.loc[daily_last["date"] == now.normalize(), "환자수"].sum())
     return {"cumulative": cumulative, "today": today}
 
 

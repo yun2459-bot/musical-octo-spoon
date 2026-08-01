@@ -326,9 +326,15 @@ def _week_start(d) -> pd.Timestamp:
 
 
 def this_and_last_week() -> tuple[pd.Timestamp, pd.Timestamp]:
+    """(왼쪽="지난주" 라벨용, 오른쪽="이번주" 라벨용) 두 주차의 월요일 날짜.
+
+    2026-08-01(토) 기준으로 파일럿 데이터가 전부 이번 달력주(7/27~8/2)에 몰려 있어서,
+    "지금까지 쌓인 데이터=왼쪽, 다가오는 새 주=오른쪽(비어있음)"으로 보이도록
+    현재 달력주를 왼쪽에, 다음 달력주(다가오는 월요일 시작)를 오른쪽에 고정한다.
+    """
     today = pd.Timestamp.now().normalize()
-    this_week = _week_start(today)
-    return this_week - pd.Timedelta(days=7), this_week
+    current_week = _week_start(today)
+    return current_week, current_week + pd.Timedelta(days=7)
 
 
 def weekly_max_by_branch(obs: pd.DataFrame) -> pd.DataFrame:

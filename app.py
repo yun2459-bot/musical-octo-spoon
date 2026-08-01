@@ -467,9 +467,22 @@ with tab4:
                     # 지사 사무실은 실제 좌표에 큰 원으로, 규모 있는(사업장 2개+) 부속 사업장은 사무실
                     # 원 옆에 붙는 작은 막대로 표시한다 — 부속 막대는 위치가 정확하지 않아도 되므로
                     # 실제 좌표 대신 사무실 원에 종속된 형태로 붙여서 "딸린 사업장" 느낌을 준다.
+                    #
+                    # 경북·울산·부산·경남·삼천포·광양은 실제로도 지리적으로 가까워 원/라벨이 서로
+                    # 겹친다 — 실제 좌표는 그대로 두고 화면 표시 위치만 픽셀 단위로 살짝 벌린다
+                    # (지도 크기 460x690 기준. 안 맞으면 이 값만 조절하면 됨).
+                    PIN_NUDGE_PX = {
+                        "경북": (15, -21),
+                        "울산": (24, -10),
+                        "부산": (23, 13),
+                        "경남": (-26, 0),
+                        "삼천포": (-17, 20),
+                        "광양": (-20, 10),
+                    }
                     pins_html = []
                     for c in clusters:
                         left, top = HW.latlon_to_svg_pct(c["lat"], c["lon"])
+                        nudge_x, nudge_y = PIN_NUDGE_PX.get(c["branch"], (0, 0))
                         color = HW.level_color(c["level"])
                         est_prefix = "~" if c.get("is_estimate") else ""
                         badge = f'{est_prefix}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
@@ -510,7 +523,8 @@ with tab4:
 
                         pins_html.append(
                             f'<div style="position:absolute; left:{left:.3f}%; top:{top:.3f}%; '
-                            f'transform:translate(-50%,-100%); text-align:center; font-family:sans-serif; z-index:2;">'
+                            f'transform:translate(calc(-50% + {nudge_x}px), calc(-100% + {nudge_y}px)); '
+                            f'text-align:center; font-family:sans-serif; z-index:2;">'
                             f'<div style="display:flex; align-items:flex-end; justify-content:center;">'
                             f'<div title="{title}" style="background:{color}; color:white; border-radius:50%; '
                             f'width:42px; height:42px; display:flex; align-items:center; justify-content:center; '

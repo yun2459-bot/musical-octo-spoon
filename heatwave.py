@@ -124,8 +124,22 @@ def korea_svg_data_uri() -> str | None:
     return "data:image/svg+xml;base64," + base64.b64encode(raw).decode("ascii")
 
 
+def _is_blank_level(level) -> bool:
+    """None/NaN 모두 '정상(단계 없음)'으로 취급한다.
+
+    SQLite NULL은 pandas를 거치면 float('nan')이 되는데, 파이썬에서 `not float('nan')`은
+    False라서 `level or "정상"` 같은 흔한 폴백 패턴이 NaN에서는 조용히 깨진다(카드에
+    "정상" 대신 "nan"이 찍히는 버그의 원인). 반드시 이 함수로 판정할 것.
+    """
+    return level is None or (isinstance(level, float) and math.isnan(level))
+
+
+def level_label(level: str | None) -> str:
+    return "정상" if _is_blank_level(level) else level
+
+
 def level_color(level: str | None) -> str:
-    if not level:
+    if _is_blank_level(level):
         return NORMAL_COLOR
     return LEVEL_COLOR.get(level, NORMAL_COLOR)
 
@@ -305,6 +319,44 @@ def daily_max_by_branch(obs: pd.DataFrame) -> pd.DataFrame:
     return direct
 
 
+def _week_start(d) -> pd.Timestamp:
+    """해당 날짜가 속한 주의 월요일(자정)."""
+    ts = pd.Timestamp(d)
+    return (ts - pd.Timedelta(days=ts.dayofweek)).normalize()
+
+
+def this_and_last_week() -> tuple[pd.Timestamp, pd.Timestamp]:
+    today = pd.Timestamp.now().normalize()
+    this_week = _week_start(today)
+    return this_week - pd.Timedelta(days=7), this_week
+
+
+def weekly_max_by_branch(obs: pd.DataFrame) -> pd.DataFrame:
+    """지사별 주차(월요일 시작) 최고 체감온도 — 지난주/이번주 두 칸만 고정으로 보여준다.
+
+    일별 최고값(daily_max_by_branch, 추정 로직 포함)을 주 단위로 다시 최댓값 집계한다.
+    이번주에 아직 관측이 없어도 빈 칸으로라도 항상 두 주차가 함께 보이도록,
+    지사 x 주차 전 조합을 채워 넣는다(값 없는 칸은 막대가 안 뜬다).
+    """
+    last_week, this_week = this_and_last_week()
+    cities = load_branch_cities()
+    branches = cities["branch"].unique().tolist() if not cities.empty else []
+
+    if obs.empty:
+        weekly = pd.DataFrame(columns=["branch", "week", "apparent_temp"])
+    else:
+        dmax = daily_max_by_branch(obs)
+        dmax["week"] = dmax["date"].apply(_week_start)
+        dmax = dmax[dmax["week"].isin([last_week, this_week])]
+        weekly = dmax.groupby(["branch", "week"], as_index=False)["apparent_temp"].max()
+
+    idx = pd.MultiIndex.from_product([branches, [last_week, this_week]], names=["branch", "week"])
+    full = pd.DataFrame(index=idx).reset_index()
+    result = full.merge(weekly, on=["branch", "week"], how="left")
+    result["주차"] = result["week"].map({last_week: "지난주", this_week: "이번주"})
+    return result
+
+
 def incident_placeholder() -> pd.DataFrame:
     """온열질환 환자·작업조정·작업중지 현황 — 자리표시자(전부 0/빈값).
 
@@ -478,9 +530,26 @@ def load_photo_reports() -> pd.DataFrame:
 
 
 def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
-    if notif.empty:
-        return notif
-    d = notif.copy()
-    d["week"] = d["sent_at"].dt.to_period("W-MON").apply(lambda p: p.start_time.date())
-    out = d.groupby(["week", "branch", "level"], as_index=False).size()
-    return out.rename(columns={"size": "발령횟수"})
+    """지사별 주차별 경보 발령 건수 — 지난주/이번주 두 칸을 항상 고정으로 보여준다.
+
+    이번주에 발령이 하나도 없어도(정상적인 상태) 오른쪽 패널이 아예 안 뜨는 대신
+    빈 패널로라도 뜨도록, 그 주차에 0건짜리 더미 행을 하나 채워 넣는다.
+    """
+    last_week, this_week = this_and_last_week()
+
+    if not notif.empty:
+        d = notif.copy()
+        d["week"] = pd.to_datetime(d["sent_at"]).apply(_week_start)
+        d = d[d["week"].isin([last_week, this_week])]
+        out = d.groupby(["week", "branch", "level"], as_index=False).size().rename(columns={"size": "발령횟수"})
+    else:
+        out = pd.DataFrame(columns=["week", "branch", "level", "발령횟수"])
+
+    for wk in (last_week, this_week):
+        if wk not in out["week"].values:
+            out = pd.concat([out, pd.DataFrame([{
+                "week": wk, "branch": "", "level": LEVEL_ORDER[0], "발령횟수": 0,
+            }])], ignore_index=True)
+
+    out["주차"] = out["week"].map({last_week: "지난주", this_week: "이번주"})
+    return out

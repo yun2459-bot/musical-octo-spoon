@@ -450,7 +450,7 @@ with tab4:
                         detail = (f'{c["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
                                    f'{c["estimate_source"]} {c["estimate_km"]:.0f}km 값 사용)')
                     elif c["has_data"]:
-                        detail = f'{c["apparent_temp"]:.1f}℃ ({c["level"] or "정상"})'
+                        detail = f'{c["apparent_temp"]:.1f}℃ ({HW.level_label(c["level"])})'
                     else:
                         detail = "관측 데이터 없음"
                     title = f'{c["branch"]} {c["city"]}(사무실) · {detail}'
@@ -465,7 +465,7 @@ with tab4:
                             s_detail = (f'{s["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
                                          f'{s["estimate_source"]} {s["estimate_km"]:.0f}km 값 사용)')
                         elif s["has_data"]:
-                            s_detail = f'{s["apparent_temp"]:.1f}℃ ({s["level"] or "정상"})'
+                            s_detail = f'{s["apparent_temp"]:.1f}℃ ({HW.level_label(s["level"])})'
                         else:
                             s_detail = "관측 데이터 없음"
                         s_title = f'{c["branch"]} {s["city"]}(부속, {s["site_count"]}개소) · {s_detail}'
@@ -599,7 +599,7 @@ with tab4:
                 for chunk in rows_of_cards:
                     cols = st.columns(4)
                     for col, row in zip(cols, chunk.itertuples()):
-                        level = row.level or "정상"
+                        level = HW.level_label(row.level)
                         color = HW.level_color(row.level)
                         source_city = row.estimate_source.split(" ")[-1] if row.is_estimate else row.worst_city
                         with col:
@@ -631,42 +631,45 @@ with tab4:
             st.caption("체감온도 기준(세방 SAFETY TF): 주의 33℃ · 경고 35℃ · 위험 38℃ · 배지 온도는 지사 내 도시 중 최고값입니다.")
 
             st.markdown("---")
-            st.subheader("📈 일별 최고 체감온도 추이 (지사별)")
-            dmax = HW.daily_max_by_branch(obs)
-            dmax = dmax.sort_values("date")
-            dmax["date_str"] = dmax["date"].astype(str)
-            dmax["단계"] = dmax["apparent_temp"].apply(HW.temp_level).fillna("정상")
-            dmax["라벨"] = dmax["apparent_temp"].map(lambda t: f"{t:.1f}°")
+            st.subheader("📈 주차별 최고 체감온도 추이 (지사별)")
+            wmax = HW.weekly_max_by_branch(obs)
+            wmax["week_str"] = wmax["week"].dt.strftime("%Y-%m-%d")
+            wmax_chart = wmax.dropna(subset=["apparent_temp"]).copy()
+            wmax_chart["단계"] = wmax_chart["apparent_temp"].apply(HW.temp_level).fillna("정상")
+            wmax_chart["라벨"] = wmax_chart["apparent_temp"].map(lambda t: f"{t:.1f}°")
             level_colors = {"정상": HW.NORMAL_COLOR, **HW.LEVEL_COLOR}
-            fig_temp = px.bar(dmax, x="branch", y="apparent_temp", color="단계", facet_col="date_str", height=380,
-                               category_orders={"단계": ["정상", *HW.LEVEL_ORDER], "branch": HW.branch_order()},
+            fig_temp = px.bar(wmax_chart, x="branch", y="apparent_temp", color="단계", facet_col="주차", height=380,
+                               category_orders={"단계": ["정상", *HW.LEVEL_ORDER], "branch": HW.branch_order(),
+                                                 "주차": ["지난주", "이번주"]},
                                color_discrete_map=level_colors, text="라벨")
             fig_temp.update_traces(textposition="outside", textfont=dict(size=13, color="white"), cliponaxis=False)
             for lvl, y in [("주의", 33), ("경고", 35), ("위험", 38)]:
                 fig_temp.add_hline(y=y, line_dash="dot", line_color=HW.LEVEL_COLOR[lvl],
                                     annotation_text=lvl, annotation_position="right")
             fig_temp.update_layout(margin=dict(l=0, r=0, t=40, b=0), yaxis_title="체감온도(°C)", legend_title="단계")
-            fig_temp.for_each_annotation(lambda a: a.update(text=a.text.replace("date_str=", "")))
+            # 주차 라벨 옆에 실제 날짜(그 주 월요일)도 같이 보여준다.
+            week_dates = dict(zip(wmax["주차"], wmax["week_str"]))
+            fig_temp.for_each_annotation(
+                lambda a: a.update(text=f"{a.text} ({week_dates.get(a.text, '')}~)") if a.text in week_dates else a)
             fig_temp.update_xaxes(title="")
             fig_temp.update_yaxes(range=[25, 40])
             st.plotly_chart(fig_temp, use_container_width=True)
+            st.caption("왼쪽 = 지난주, 오른쪽 = 이번주(진행 중). 각 지사·주차의 최고 체감온도만 표시합니다.")
 
             st.markdown("---")
             st.subheader("🌡️ 지사별 폭염 단계 발생 현황(주차별)")
-            if notif.empty:
-                st.info("아직 발령된 경보가 없습니다.")
-            else:
-                weekly = HW.weekly_alert_counts_by_branch(notif)
-                weekly["week"] = weekly["week"].astype(str)
-                fig_alert = px.bar(weekly, x="branch", y="발령횟수", color="level", barmode="stack",
-                                    facet_col="week", height=380,
-                                    category_orders={"level": HW.LEVEL_ORDER, "branch": HW.branch_order()},
-                                    color_discrete_map=HW.LEVEL_COLOR)
-                fig_alert.update_layout(margin=dict(l=0, r=0, t=40, b=0), yaxis_title="발령 건수", legend_title="단계")
-                fig_alert.for_each_annotation(lambda a: a.update(text=a.text.replace("week=", "")))
-                fig_alert.update_xaxes(title="")
-                st.plotly_chart(fig_alert, use_container_width=True)
+            weekly = HW.weekly_alert_counts_by_branch(notif)
+            fig_alert = px.bar(weekly, x="branch", y="발령횟수", color="level", barmode="stack",
+                                facet_col="주차", height=380,
+                                category_orders={"level": HW.LEVEL_ORDER, "branch": HW.branch_order(),
+                                                  "주차": ["지난주", "이번주"]},
+                                color_discrete_map=HW.LEVEL_COLOR)
+            fig_alert.update_layout(margin=dict(l=0, r=0, t=40, b=0), yaxis_title="발령 건수", legend_title="단계")
+            fig_alert.update_xaxes(title="")
+            st.plotly_chart(fig_alert, use_container_width=True)
+            st.caption("왼쪽 = 지난주, 오른쪽 = 이번주(진행 중 — 아직 발령이 없으면 빈 패널로 표시됩니다).")
 
+            if not notif.empty:
                 with st.expander("📋 최근 발령 이력 전체"):
                     st.dataframe(
                         notif.sort_values("sent_at", ascending=False)[["branch", "site", "level", "apparent_temp", "sent_at", "status"]],

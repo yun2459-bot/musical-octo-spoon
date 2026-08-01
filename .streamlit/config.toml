@@ -1,0 +1,32 @@
+# 세방(주) 브랜드 아이덴티티 테마.
+# 색상 출처: 사내 Color Palette 가이드 / 폰트: 세방고딕체.zip.
+# 주의: 폭염 단계 신호색(heatwave.py의 LEVEL_COLOR/NORMAL_COLOR, 정상=초록~위험=빨강)은
+# 안전 신호등 의미라 이 테마와 무관하게 코드에서 직접 지정 — 여기서 건드리지 않는다.
+
+[server]
+enableStaticServing = true
+
+[theme]
+base = "light"
+primaryColor = "#009CA6"             # Secondary: Pantone 320 C (SEBANG Green)
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#E4E4E2" # Primary: Pantone Cool Gray 2 C (SEBANG Light Gray 1)
+textColor = "#3B4551"                # Primary: Pantone 432 C (SEBANG Dark Gray)
+font = "SEBANG Gothic, sans-serif"
+
+[[theme.fontFaces]]
+family = "SEBANG Gothic"
+url = "app/static/sebang-gothic-regular.ttf"
+weight = "400"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "SEBANG Gothic"
+url = "app/static/sebang-gothic-bold.ttf"
+weight = "700"
+style = "normal"
+
+[theme.sidebar]
+backgroundColor = "#3B4551"          # SEBANG Dark Gray
+secondaryBackgroundColor = "#4E5A66"
+textColor = "#F2F2F2"

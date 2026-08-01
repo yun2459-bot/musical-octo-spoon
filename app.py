@@ -26,6 +26,22 @@ import heatwave as HW
 # ------------------------------------------------------------------ 기본 설정
 st.set_page_config(page_title="현장안전 통합분석 대시보드", page_icon="🦺", layout="wide")
 
+# ------------------------------------------------------------------ 세방(주) 브랜드 아이덴티티
+# 배경/글자/사이드바/버튼·탭 강조색과 세방고딕 폰트는 .streamlit/config.toml의 네이티브
+# [theme]/[theme.sidebar]/[[theme.fontFaces]] 설정으로 적용한다(다크모드 자동감지와
+# 충돌하는 수동 CSS 주입 대신 — 그러면 Streamlit이 라이트/다크 전반에 일관되게 반영해준다).
+# 주의: 폭염 단계 신호색(heatwave.py의 LEVEL_COLOR/NORMAL_COLOR, 정상=초록~위험=빨강)은
+# 안전 신호등 의미라 브랜드색 적용 대상이 아니다 — 이 테마와 무관하게 그대로 유지.
+SEBANG_DARK_GRAY = "#3B4551"     # Primary: Pantone 432 C
+SEBANG_LIGHT_GRAY_1 = "#E4E4E2"  # Primary: Pantone Cool Gray 2 C
+SEBANG_LIGHT_GRAY_2 = "#A7A9AC"  # Primary: Pantone 429 C
+SEBANG_GREEN = "#009CA6"         # Secondary: Pantone 320 C
+SEBANG_ORANGE = "#EE2737"        # Secondary: Pantone 1788 C
+
+_FONT_DIR = Path(__file__).parent / "fonts"
+_SEBANG_REGULAR = _FONT_DIR / "SEBANG Gothic.ttf"
+_SEBANG_BOLD = _FONT_DIR / "SEBANG Gothic Bold.ttf"
+
 
 def _check_password() -> bool:
     """APP_PASSWORD(secrets)가 설정돼 있으면 맞는 비밀번호를 입력해야 통과.
@@ -56,9 +72,9 @@ def _check_password() -> bool:
 if not _check_password():
     st.stop()
 
-# 배포 환경(Streamlit Cloud 등 리눅스)엔 윈도우 폰트가 없으므로 저장소에 번들된 폰트를 우선 쓰고,
-# 로컬 윈도우 개발환경에서는 맑은 고딕을 그대로 쓴다.
+# 차트(matplotlib)도 세방고딕을 우선 쓰고, 파일이 없는 예외 상황에서만 번들 폰트/윈도우 폰트로 폴백.
 _FONT_CANDIDATES = [
+    _SEBANG_REGULAR,
     Path(__file__).parent / "fonts" / "NanumGothic.ttf",
     Path(r"C:\Windows\Fonts\malgun.ttf"),
 ]
@@ -555,13 +571,13 @@ with tab4:
                 st.markdown("##### 🏥 사업장 온열질환 환자 발생 현황")
                 psum = HW.patient_summary()
                 today_label = pd.Timestamp.now().strftime("%y.%m.%d")
-                th_style = ("background:#5b7fd4; color:white; padding:8px 4px; font-size:13px; "
-                            "border:1px solid #4a6bb8;")
-                td_style = ("background:#c3cdee; padding:12px 4px; font-size:16px; font-weight:700; "
-                            "border:1px solid #a9b6e0;")
+                th_style = (f"background:{SEBANG_DARK_GRAY}; color:white; padding:8px 4px; font-size:13px; "
+                            f"border:1px solid {SEBANG_DARK_GRAY};")
+                td_style = (f"background:{SEBANG_LIGHT_GRAY_1}; color:{SEBANG_DARK_GRAY}; padding:12px 4px; "
+                            f"font-size:16px; font-weight:700; border:1px solid {SEBANG_LIGHT_GRAY_2};")
                 st.markdown(
                     '<table style="width:100%; border-collapse:collapse; text-align:center; '
-                    'font-family:sans-serif; margin-bottom:8px;">'
+                    'font-family:\'SEBANG Gothic\',sans-serif; margin-bottom:8px;">'
                     f'<tr><th style="{th_style}">25년(전년도)</th>'
                     f'<th style="{th_style}">26년(누적)</th>'
                     f'<th style="{th_style}">금일({today_label})</th></tr>'

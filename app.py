@@ -85,6 +85,14 @@ INSP_BRANCHES = sorted(insp["지사"].unique())
 st.sidebar.title("🦺 현장안전 통합분석")
 st.sidebar.caption("세방(주) · 프로토타입")
 
+# 브라우저 F5(하드 새로고침)는 새 세션을 만들어 _check_password()의 session_state가
+# 초기화되므로 비밀번호를 다시 묻는다. 이 버튼은 스크립트만 재실행(st.rerun)해서
+# 같은 세션을 유지한 채 캐시된 데이터만 최신화한다.
+if st.sidebar.button("🔄 새로고침", use_container_width=True,
+                      help="비밀번호 재입력 없이 화면과 데이터만 최신 상태로 다시 불러옵니다."):
+    st.cache_data.clear()
+    st.rerun()
+
 period_opt = st.sidebar.radio("분석 기간", ["최근 90일", "최근 180일", "전체 기간"], index=2)
 end = insp["점검일자"].max()
 if period_opt == "최근 90일":
@@ -431,98 +439,149 @@ with tab4:
         else:
             clusters = HW.map_clusters(obs)
 
-            st.subheader("🗺️ 지사별 폭염 현황 지도")
-            svg_uri = HW.korea_svg_data_uri()
-            if svg_uri is None or not clusters:
-                st.info("지도 배경 SVG 또는 사업장 좌표가 없습니다. `Map_of_South_Korea-blank.svg`와 "
-                        "`config/sites.yaml`을 확인해주세요.")
-            else:
-                # 지사 사무실은 실제 좌표에 큰 원으로, 규모 있는(사업장 2개+) 부속 사업장은 사무실
-                # 원 옆에 붙는 작은 막대로 표시한다 — 부속 막대는 위치가 정확하지 않아도 되므로
-                # 실제 좌표 대신 사무실 원에 종속된 형태로 붙여서 "딸린 사업장" 느낌을 준다.
-                pins_html = []
-                for c in clusters:
-                    left, top = HW.latlon_to_svg_pct(c["lat"], c["lon"])
-                    color = HW.level_color(c["level"])
-                    est_prefix = "~" if c.get("is_estimate") else ""
-                    badge = f'{est_prefix}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
-                    if c["has_data"] and c.get("is_estimate"):
-                        detail = (f'{c["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
-                                   f'{c["estimate_source"]} {c["estimate_km"]:.0f}km 값 사용)')
-                    elif c["has_data"]:
-                        detail = f'{c["apparent_temp"]:.1f}℃ ({HW.level_label(c["level"])})'
-                    else:
-                        detail = "관측 데이터 없음"
-                    title = f'{c["branch"]} {c["city"]}(사무실) · {detail}'
-                    border_style = "2px dashed white" if c.get("is_estimate") else "2px solid white"
+            col_map, col_kpi = st.columns([3, 2])
 
-                    satellites_html = ""
-                    for s in c["satellites"]:
-                        s_color = HW.level_color(s["level"])
-                        s_est = "~" if s.get("is_estimate") else ""
-                        s_badge = f'{s_est}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
-                        if s["has_data"] and s.get("is_estimate"):
-                            s_detail = (f'{s["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
-                                         f'{s["estimate_source"]} {s["estimate_km"]:.0f}km 값 사용)')
-                        elif s["has_data"]:
-                            s_detail = f'{s["apparent_temp"]:.1f}℃ ({HW.level_label(s["level"])})'
+            with col_map:
+                st.subheader("🗺️ 지사별 폭염 현황 지도")
+                svg_uri = HW.korea_svg_data_uri()
+                if svg_uri is None or not clusters:
+                    st.info("지도 배경 SVG 또는 사업장 좌표가 없습니다. `Map_of_South_Korea-blank.svg`와 "
+                            "`config/sites.yaml`을 확인해주세요.")
+                else:
+                    # 지사 사무실은 실제 좌표에 큰 원으로, 규모 있는(사업장 2개+) 부속 사업장은 사무실
+                    # 원 옆에 붙는 작은 막대로 표시한다 — 부속 막대는 위치가 정확하지 않아도 되므로
+                    # 실제 좌표 대신 사무실 원에 종속된 형태로 붙여서 "딸린 사업장" 느낌을 준다.
+                    pins_html = []
+                    for c in clusters:
+                        left, top = HW.latlon_to_svg_pct(c["lat"], c["lon"])
+                        color = HW.level_color(c["level"])
+                        est_prefix = "~" if c.get("is_estimate") else ""
+                        badge = f'{est_prefix}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
+                        if c["has_data"] and c.get("is_estimate"):
+                            detail = (f'{c["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
+                                       f'{c["estimate_source"]} {c["estimate_km"]:.0f}km 값 사용)')
+                        elif c["has_data"]:
+                            detail = f'{c["apparent_temp"]:.1f}℃ ({HW.level_label(c["level"])})'
                         else:
-                            s_detail = "관측 데이터 없음"
-                        s_title = f'{c["branch"]} {s["city"]}(부속, {s["site_count"]}개소) · {s_detail}'
-                        s_border = "1.5px dashed white" if s.get("is_estimate") else "1.5px solid white"
-                        satellites_html += (
-                            f'<div style="display:flex; flex-direction:column; align-items:center; margin-left:3px;">'
-                            f'<div title="{s_title}" style="width:20px; height:30px; background:{s_color}; '
-                            f'border-radius:4px 4px 0 0; display:flex; align-items:center; justify-content:center; '
-                            f'font-size:8px; color:white; font-weight:700; border:{s_border}; '
-                            f'border-bottom:none; box-shadow:0 1px 3px rgba(0,0,0,.3);">{s_badge}</div>'
-                            f'<div style="font-size:7px; color:#444; background:rgba(255,255,255,.85); '
-                            f'padding:0 2px; white-space:nowrap; border-radius:0 0 3px 3px;">{s["city"]}</div>'
+                            detail = "관측 데이터 없음"
+                        title = f'{c["branch"]} {c["city"]}(사무실) · {detail}'
+                        border_style = "2px dashed white" if c.get("is_estimate") else "2px solid white"
+
+                        satellites_html = ""
+                        for s in c["satellites"]:
+                            s_color = HW.level_color(s["level"])
+                            s_est = "~" if s.get("is_estimate") else ""
+                            s_badge = f'{s_est}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
+                            if s["has_data"] and s.get("is_estimate"):
+                                s_detail = (f'{s["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
+                                             f'{s["estimate_source"]} {s["estimate_km"]:.0f}km 값 사용)')
+                            elif s["has_data"]:
+                                s_detail = f'{s["apparent_temp"]:.1f}℃ ({HW.level_label(s["level"])})'
+                            else:
+                                s_detail = "관측 데이터 없음"
+                            s_title = f'{c["branch"]} {s["city"]}(부속, {s["site_count"]}개소) · {s_detail}'
+                            s_border = "1.5px dashed white" if s.get("is_estimate") else "1.5px solid white"
+                            satellites_html += (
+                                f'<div style="display:flex; flex-direction:column; align-items:center; margin-left:3px;">'
+                                f'<div title="{s_title}" style="width:20px; height:30px; background:{s_color}; '
+                                f'border-radius:4px 4px 0 0; display:flex; align-items:center; justify-content:center; '
+                                f'font-size:8px; color:white; font-weight:700; border:{s_border}; '
+                                f'border-bottom:none; box-shadow:0 1px 3px rgba(0,0,0,.3);">{s_badge}</div>'
+                                f'<div style="font-size:7px; color:#444; background:rgba(255,255,255,.85); '
+                                f'padding:0 2px; white-space:nowrap; border-radius:0 0 3px 3px;">{s["city"]}</div>'
+                                f'</div>'
+                            )
+
+                        pins_html.append(
+                            f'<div style="position:absolute; left:{left:.3f}%; top:{top:.3f}%; '
+                            f'transform:translate(-50%,-100%); text-align:center; font-family:sans-serif; z-index:2;">'
+                            f'<div style="display:flex; align-items:flex-end; justify-content:center;">'
+                            f'<div title="{title}" style="background:{color}; color:white; border-radius:50%; '
+                            f'width:42px; height:42px; display:flex; align-items:center; justify-content:center; '
+                            f'font-size:14px; font-weight:700; border:{border_style}; '
+                            f'box-shadow:0 1px 4px rgba(0,0,0,.35); flex-shrink:0;">{badge}</div>'
+                            f'{satellites_html}'
+                            f'</div>'
+                            f'<div style="font-size:10px; margin-top:2px; color:#111; font-weight:700; '
+                            f'background:rgba(255,255,255,.85); border-radius:4px; padding:0 3px; white-space:nowrap;">'
+                            f'{c["branch"]}</div>'
                             f'</div>'
                         )
 
-                    pins_html.append(
-                        f'<div style="position:absolute; left:{left:.3f}%; top:{top:.3f}%; '
-                        f'transform:translate(-50%,-100%); text-align:center; font-family:sans-serif; z-index:2;">'
-                        f'<div style="display:flex; align-items:flex-end; justify-content:center;">'
-                        f'<div title="{title}" style="background:{color}; color:white; border-radius:50%; '
-                        f'width:42px; height:42px; display:flex; align-items:center; justify-content:center; '
-                        f'font-size:14px; font-weight:700; border:{border_style}; '
-                        f'box-shadow:0 1px 4px rgba(0,0,0,.35); flex-shrink:0;">{badge}</div>'
-                        f'{satellites_html}'
-                        f'</div>'
-                        f'<div style="font-size:10px; margin-top:2px; color:#111; font-weight:700; '
-                        f'background:rgba(255,255,255,.85); border-radius:4px; padding:0 3px; white-space:nowrap;">'
-                        f'{c["branch"]}</div>'
-                        f'</div>'
+                    # SVG viewBox가 800x1200(비율 2:3)이므로, 래퍼도 정확히 같은 비율의 고정 픽셀
+                    # 크기로 만들어야 left/top(%) 핀 좌표가 이미지 위에 정확히 겹친다.
+                    # (2컬럼 레이아웃이라 폭을 좁혀 col_map 안에 들어가도록 맞춤)
+                    map_w, map_h = 460, 690
+                    map_html = (
+                        '<html><body style="margin:0;">'
+                        f'<div style="position:relative; width:{map_w}px; height:{map_h}px; margin:0 auto;">'
+                        f'<img src="{svg_uri}" style="position:absolute; top:0; left:0; width:{map_w}px; '
+                        f'height:{map_h}px; display:block;" />'
+                        f'{"".join(pins_html)}'
+                        '</div></body></html>'
                     )
+                    components.html(map_html, height=map_h + 20, scrolling=False)
 
-                # SVG viewBox가 800x1200(비율 2:3)이므로, 래퍼도 정확히 같은 비율의 고정 픽셀
-                # 크기로 만들어야 left/top(%) 핀 좌표가 이미지 위에 정확히 겹친다.
-                map_w, map_h = 560, 840
-                map_html = (
-                    '<html><body style="margin:0;">'
-                    f'<div style="position:relative; width:{map_w}px; height:{map_h}px; margin:0 auto;">'
-                    f'<img src="{svg_uri}" style="position:absolute; top:0; left:0; width:{map_w}px; '
-                    f'height:{map_h}px; display:block;" />'
-                    f'{"".join(pins_html)}'
-                    '</div></body></html>'
+                    leg1, leg2, leg3, leg4 = st.columns(4)
+                    for col, (lvl, label) in zip(
+                        (leg1, leg2, leg3, leg4),
+                        [(None, "정상"), ("주의", "주의 33℃+"), ("경고", "경고 35℃+"), ("위험", "위험 38℃+")],
+                    ):
+                        col.markdown(
+                            f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+                            f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}',
+                            unsafe_allow_html=True)
+                    st.caption("큰 원 = 지사 사무실(실제 위치). 옆에 붙은 작은 막대 = 규모 있는(사업장 2곳 이상) 또는 "
+                               "수동 지정한 부속 사업장(위치는 사무실에 종속 표시, 실제 좌표 아님). "
+                               "점선 테두리 + \"~숫자\" = 그 도시 자체 관측지점이 없어 가장 가까운 실측 지점 값으로 "
+                               "추정한 온도(호버하면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다.")
+
+            with col_kpi:
+                st.subheader("🔥 현재 최고 체감온도 지사")
+                summary_now = HW.branch_summary(obs)
+                hot = summary_now[summary_now["has_data"]] if not summary_now.empty else summary_now
+                if hot.empty:
+                    st.info("관측 데이터가 있는 지사가 아직 없습니다.")
+                else:
+                    top = hot.loc[hot["apparent_temp"].idxmax()]
+                    est_prefix = "~" if top["is_estimate"] else ""
+                    st.metric(
+                        label=f'{top["branch"]} · {top["worst_city"]}',
+                        value=f'{est_prefix}{top["apparent_temp"]:.1f}℃',
+                    )
+                    st.caption(f'{HW.level_label(top["level"])} 단계'
+                               + (" · 자체 관측지점 없어 추정치" if top["is_estimate"] else ""))
+
+                st.markdown("##### 🏥 사업장 온열질환 환자 발생 현황")
+                psum = HW.patient_summary()
+                today_label = pd.Timestamp.now().strftime("%y.%m.%d")
+                th_style = ("background:#5b7fd4; color:white; padding:8px 4px; font-size:13px; "
+                            "border:1px solid #4a6bb8;")
+                td_style = ("background:#c3cdee; padding:12px 4px; font-size:16px; font-weight:700; "
+                            "border:1px solid #a9b6e0;")
+                st.markdown(
+                    '<table style="width:100%; border-collapse:collapse; text-align:center; '
+                    'font-family:sans-serif; margin-bottom:8px;">'
+                    f'<tr><th style="{th_style}">25년(전년도)</th>'
+                    f'<th style="{th_style}">26년(누적)</th>'
+                    f'<th style="{th_style}">금일({today_label})</th></tr>'
+                    f'<tr><td style="{td_style}">집계 없음</td>'
+                    f'<td style="{td_style}">{psum["cumulative"]}명</td>'
+                    f'<td style="{td_style}">{psum["today"]}명</td></tr>'
+                    '</table>',
+                    unsafe_allow_html=True,
                 )
-                components.html(map_html, height=map_h + 20, scrolling=False)
+                st.caption("25년(전년도) = 온열질환 신고 체계가 이번 시즌 처음 도입돼 원천 데이터 없음. "
+                           "26년(누적) = 올해 구글폼 신규 발생 제출분 합계. 금일 = 오늘 제출분만(자정 리셋).")
 
-                leg1, leg2, leg3, leg4 = st.columns(4)
-                for col, (lvl, label) in zip(
-                    (leg1, leg2, leg3, leg4),
-                    [(None, "정상"), ("주의", "주의 33℃+"), ("경고", "경고 35℃+"), ("위험", "위험 38℃+")],
-                ):
-                    col.markdown(
-                        f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-                        f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}',
-                        unsafe_allow_html=True)
-                st.caption("큰 원 = 지사 사무실(실제 위치). 옆에 붙은 작은 막대 = 규모 있는(사업장 2곳 이상) 또는 "
-                           "수동 지정한 부속 사업장(위치는 사무실에 종속 표시, 실제 좌표 아님). "
-                           "점선 테두리 + \"~숫자\" = 그 도시 자체 관측지점이 없어 가장 가까운 실측 지점 값으로 "
-                           "추정한 온도(호버하면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다.")
+                st.markdown("##### 🚨 작업중지 보고")
+                stoppages = HW.today_stoppages()
+                if stoppages.empty:
+                    st.info("금일 작업중지 보고 없음")
+                else:
+                    for row in stoppages.itertuples():
+                        detail = row.중지상세 or "(상세 미기재)"
+                        st.error(f"**{row.branch}** 작업중지 {int(row.작업중지)}건\n\n{detail}")
 
             st.markdown("---")
             st.subheader("🚨 지사별 온열질환·조치 현황")

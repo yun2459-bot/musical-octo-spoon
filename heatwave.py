@@ -408,8 +408,8 @@ def _parse_google_timestamp(raw) -> pd.Timestamp:
     return pd.to_datetime(raw, errors="coerce")
 
 
-def load_incident_reports() -> pd.DataFrame | None:
-    """구글폼 응답 시트(웹에 게시 CSV)를 읽어 지사별 최신 제출값만 남긴다.
+def load_incident_reports_raw() -> pd.DataFrame | None:
+    """구글폼 응답 시트를 읽어 제출행 전부(지사별 중복 제거 없이) 반환 — 누적 집계용.
 
     시트 헤더는 폼 문항 텍스트를 그대로 쓴다는 전제로 매칭한다. URL 미설정이거나
     조회 실패, 필요한 컬럼이 없으면 None을 반환해 호출부가 기본값으로 폴백하게 한다.
@@ -449,8 +449,52 @@ def load_incident_reports() -> pd.DataFrame | None:
     if df.empty:
         return df
     df["중지상세"] = df["중지상세"].fillna("")
-    return df.sort_values("timestamp").groupby("branch", as_index=False).last()[
+    return df.sort_values("timestamp")[
         ["branch", "환자수", "작업조정", "작업중지", "중지상세", "timestamp"]]
+
+
+def load_incident_reports() -> pd.DataFrame | None:
+    """구글폼 응답 시트(웹에 게시 CSV)를 읽어 지사별 최신 제출값만 남긴다."""
+    raw = load_incident_reports_raw()
+    if raw is None or raw.empty:
+        return raw
+    return raw.groupby("branch", as_index=False).last()[
+        ["branch", "환자수", "작업조정", "작업중지", "중지상세", "timestamp"]]
+
+
+def patient_summary() -> dict:
+    """온열질환 환자수 전사 합계: 26년(올해) 누적, 금일.
+
+    구글폼 "환자수"는 지사가 그날 보고하는 신규 발생 건수라는 전제로, 누적은 올해
+    제출분 전체를 합산하고 금일은 오늘 날짜 제출분만 합산한다. 전년도(25년) 비교치는
+    온열질환 신고 체계가 이번 시즌에 처음 도입돼 시스템 내에 원천 데이터가 없다.
+    """
+    raw = load_incident_reports_raw()
+    if raw is None or raw.empty:
+        return {"cumulative": 0, "today": 0}
+    now = pd.Timestamp.now()
+    year_rows = raw[raw["timestamp"].dt.year == now.year]
+    cumulative = int(year_rows["환자수"].sum())
+    today_rows = year_rows[year_rows["timestamp"].dt.normalize() == now.normalize()]
+    today = int(today_rows["환자수"].sum())
+    return {"cumulative": cumulative, "today": today}
+
+
+def today_stoppages() -> pd.DataFrame:
+    """금일 제출분 중 작업중지가 있는 지사만 반환 — 없으면 빈 DataFrame.
+
+    전일 이전 제출은 절대 이월하지 않는다(하루 단위로 리셋되는 알림 카드용).
+    """
+    cols = ["branch", "작업중지", "중지상세", "timestamp"]
+    raw = load_incident_reports_raw()
+    if raw is None or raw.empty:
+        return pd.DataFrame(columns=cols)
+    today = pd.Timestamp.now().normalize()
+    today_rows = raw[raw["timestamp"].dt.normalize() == today]
+    today_rows = today_rows[today_rows["작업중지"] > 0]
+    if today_rows.empty:
+        return pd.DataFrame(columns=cols)
+    return today_rows.groupby("branch", as_index=False).last()[cols]
 
 
 def incident_status() -> pd.DataFrame:

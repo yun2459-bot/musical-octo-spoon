@@ -172,11 +172,14 @@ def _city_reading(latest: pd.DataFrame, branch: str, city: str) -> dict:
     match = latest[(latest["branch"] == branch) & (latest["site"] == city)] if not latest.empty else None
     if match is not None and not match.empty:
         row = match.iloc[0]
+        official_advisory = row.get("official_advisory")
+        if pd.isna(official_advisory):
+            official_advisory = None
         return {"apparent_temp": row["apparent_temp"], "level": row["level"],
                 "observed_at": row["observed_at"], "has_data": True, "is_estimate": False,
-                "estimate_source": None, "estimate_km": None}
+                "estimate_source": None, "estimate_km": None, "official_advisory": official_advisory}
     return {"apparent_temp": None, "level": None, "observed_at": None, "has_data": False,
-            "is_estimate": False, "estimate_source": None, "estimate_km": None}
+            "is_estimate": False, "estimate_source": None, "estimate_km": None, "official_advisory": None}
 
 
 def _data_points(cities: pd.DataFrame, latest: pd.DataFrame) -> list[dict]:
@@ -201,6 +204,8 @@ def _reading_or_estimate(latest: pd.DataFrame, data_points: list[dict], branch: 
         "apparent_temp": nearest["apparent_temp"], "level": nearest["level"],
         "observed_at": nearest["observed_at"], "has_data": True, "is_estimate": True,
         "estimate_source": f'{nearest["branch"]} {nearest["city"]}', "estimate_km": km,
+        # 다른 도시(다른 특보구역)에서 빌려온 추정치라 공식특보는 같이 빌려오지 않는다.
+        "official_advisory": None,
     }
 
 
@@ -255,10 +260,14 @@ def branch_summary(obs: pd.DataFrame) -> pd.DataFrame:
         city_names = grp["city"].tolist()
         branch_obs = latest[latest["branch"] == branch] if not latest.empty else latest
         is_estimate, estimate_source, estimate_km = False, None, None
+        official_advisory = None
         if branch_obs is not None and not branch_obs.empty:
             worst = branch_obs.loc[branch_obs["apparent_temp"].idxmax()]
             apparent_temp, level = worst["apparent_temp"], worst["level"]
             worst_city, observed_at, has_data = worst["site"], worst["observed_at"], True
+            official_advisory = worst.get("official_advisory")
+            if pd.isna(official_advisory):
+                official_advisory = None
         else:
             office_rows = grp[grp["office"]]
             office = office_rows.iloc[0] if not office_rows.empty else grp.iloc[0]
@@ -267,12 +276,14 @@ def branch_summary(obs: pd.DataFrame) -> pd.DataFrame:
                 est["apparent_temp"], est["level"], est["observed_at"], est["has_data"])
             worst_city = office["city"]
             is_estimate, estimate_source, estimate_km = est["is_estimate"], est["estimate_source"], est["estimate_km"]
+            # 추정치는 다른 도시(다른 특보구역)에서 빌려온 값이라 공식특보는 같이 빌려오지 않는다.
 
         rows.append({
             "branch": branch, "cities": city_names,
             "apparent_temp": apparent_temp, "level": level,
             "is_estimate": is_estimate, "estimate_source": estimate_source, "estimate_km": estimate_km,
             "worst_city": worst_city, "observed_at": observed_at, "has_data": has_data,
+            "official_advisory": official_advisory,
         })
     return pd.DataFrame(rows)
 

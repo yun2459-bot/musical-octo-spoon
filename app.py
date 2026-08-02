@@ -495,6 +495,9 @@ with tab4:
                             detail = f'{c["apparent_temp"]:.1f}℃ ({HW.level_label(c["level"])})'
                         else:
                             detail = "관측 데이터 없음"
+                        official_advisory = c.get("official_advisory")
+                        if official_advisory:
+                            detail += f' · 기상청 공식 폭염{official_advisory} 발효중'
                         title = f'{c["branch"]} {c["city"]}(사무실) · {detail}'
                         border_style = "2px dashed white" if c.get("is_estimate") else "2px solid white"
 
@@ -536,7 +539,7 @@ with tab4:
                             f'</div>'
                             f'<div style="font-size:10px; margin-top:2px; color:#111; font-weight:700; '
                             f'background:rgba(255,255,255,.85); border-radius:4px; padding:0 3px; white-space:nowrap;">'
-                            f'{c["branch"]}</div>'
+                            f'{"🚨 " if official_advisory else ""}{c["branch"]}</div>'
                             f'</div>'
                         )
 
@@ -566,7 +569,9 @@ with tab4:
                     st.caption("큰 원 = 지사 사무실(실제 위치). 옆에 붙은 작은 막대 = 규모 있는(사업장 2곳 이상) 또는 "
                                "수동 지정한 부속 사업장(위치는 사무실에 종속 표시, 실제 좌표 아님). "
                                "점선 테두리 + \"~숫자\" = 그 도시 자체 관측지점이 없어 가장 가까운 실측 지점 값으로 "
-                               "추정한 온도(호버하면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다.")
+                               "추정한 온도(호버하면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다. "
+                               "🚨 = 기상청이 그 지역에 폭염특보(주의보/경보/중대경보)를 공식 발효 중 — 저희가 계산한 "
+                               "체감온도 단계와 다를 수 있습니다(공식 특보는 하루 예보 기준, 저희 값은 지금 이 순간의 실측값).")
 
             with col_kpi:
                 st.subheader("🔥 현재 최고 체감온도 지사")
@@ -582,7 +587,9 @@ with tab4:
                         value=f'{est_prefix}{top["apparent_temp"]:.1f}℃',
                     )
                     st.caption(f'{HW.level_label(top["level"])} 단계'
-                               + (" · 자체 관측지점 없어 추정치" if top["is_estimate"] else ""))
+                               + (" · 자체 관측지점 없어 추정치" if top["is_estimate"] else "")
+                               + (f' · 🚨 기상청 공식 폭염{top["official_advisory"]} 발효중'
+                                  if top.get("official_advisory") else ""))
 
                 st.markdown("##### 🏥 사업장 온열질환 환자 발생 현황")
                 psum = HW.patient_summary()
@@ -706,7 +713,9 @@ with tab4:
                                             text-align:center; height:168px; box-sizing:border-box;
                                             display:flex; flex-direction:column; justify-content:space-between;">
                                   <div>
-                                    <div style="font-size:15px; font-weight:700;">{row.branch}</div>
+                                    <div style="font-size:15px; font-weight:700;">
+                                      {'🚨 ' if row.official_advisory else ''}{row.branch}
+                                    </div>
                                     <div style="font-size:11px; color:#999; margin-bottom:4px; word-break:keep-all;">
                                       {'/'.join(row.cities)}
                                     </div>

@@ -7,6 +7,9 @@
 #      실시간 온도 집계에서는 제외된다.
 #      확정된 지점은 기상청 API허브 실제 응답으로 존재를 확인한 station id를 사용했다
 #      (지점명 매칭은 기상청 공개 관측지점 코드 기준 — 정식 지점정보 API 연동 전까지는 참고용).
+# region_id: 기상청 특보구역코드(폭염특보 조회용, wrn_met_data.php의 reg 인자).
+#            API허브 "예특보 > 기상특보 > 특보구역"(wrn_reg.php) 응답에서 TM_ED가
+#            2100년(=현재도 유효)인 최신 행으로 확인했다(2026-08-02). null이면 아직 확인 못한 도시.
 # lat/lon: 최근접 관측지점 판단용 도시 대표좌표 (지사 사무실 도시는 지도 핀 위치로도 사용).
 # office: true인 도시가 지사 사무실 소재지 — 지도의 메인 핀은 이 도시에 고정한다.
 # site_count: 그 도시에 있는 사업장(주소) 개수. 지도에서 사무실 외 도시를 "부속 사업장" 막대로
@@ -20,22 +23,26 @@ branches:
         lat: 37.3444
         lon: 126.9683
         stn: null
+        region_id: L1012700  # 의왕시
         office: true  # 지사 사무실 (경기도 의왕시 창말로 39)
         site_count: 1
       - name: 안성
         lat: 37.0079
         lon: 127.2795
         stn: null
+        region_id: L1013100  # 안성시
         site_count: 3  # 수도권 제1·2·3물류센터
       - name: 인천
         lat: 37.4563
         lon: 126.7052
         stn: 112  # 인천(ASOS)
+        region_id: L1110100  # 인천광역시
         site_count: 1
       - name: 평택
         lat: 36.9921
         lon: 127.1129
         stn: null
+        region_id: L1012500  # 평택시
         site_count: 1
 
   - name: 광양
@@ -44,17 +51,20 @@ branches:
         lat: 34.9407
         lon: 127.6958
         stn: null
+        region_id: L1051100  # 광양시
         office: true  # 지사 사무실 (전남 광양시 컨부두로 460)
         site_count: 7
       - name: 여수
         lat: 34.7604
         lon: 127.6622
         stn: 168  # 여수(ASOS)
+        region_id: L1051000  # 여수시
         site_count: 2
       - name: 광주
         lat: 35.1595
         lon: 126.8526
         stn: 156  # 광주(ASOS)
+        region_id: L1130100  # 광주광역시 (경기도 광주시(L1013400)와 동명이인 — 혼동 주의)
         site_count: 3
 
   - name: 부산
@@ -63,18 +73,21 @@ branches:
         lat: 35.1796
         lon: 129.0756
         stn: 159  # 부산(ASOS)
+        region_id: L1150000  # 부산광역시
         office: true  # 지사 사무실 (부산 남구 우암로 127)
         site_count: 3
       - name: 창원(진해)
         lat: 35.1500
         lon: 128.7000
         stn: 155  # 창원(ASOS) 공용
+        region_id: L1080600  # 창원시
         site_count: 1
         satellite: true  # SBCD
       - name: 양산
         lat: 35.3350
         lon: 129.0378
         stn: null
+        region_id: L1080500  # 양산시
         site_count: 1
         satellite: true
 
@@ -84,18 +97,21 @@ branches:
         lat: 35.9676
         lon: 126.7369
         stn: 140  # 군산(ASOS)
+        region_id: L1061600  # 군산시
         office: true  # 지사 사무실 (전북 군산시 산단남북로 169)
         site_count: 3
       - name: 완주
         lat: 35.9046
         lon: 127.1614
         stn: null
+        region_id: L1060500  # 완주군
         site_count: 1
         satellite: true
       - name: 전주
         lat: 35.8242
         lon: 127.1480
         stn: 146  # 전주(ASOS)
+        region_id: L1061300  # 전주시
         site_count: 1
         satellite: true
 
@@ -105,6 +121,7 @@ branches:
         lat: 35.3300  # 지도상 부산 클러스터와 겹치지 않도록 실제 좌표에서 약간 북서쪽으로 보정
         lon: 128.5300
         stn: 155  # 창원(ASOS)
+        region_id: L1080600  # 창원시
         office: true  # 지사 사무실 (경남 창원시 마산회원구 봉암공단 14길 23)
         site_count: 3
 
@@ -114,12 +131,14 @@ branches:
         lat: 35.5384
         lon: 129.3114
         stn: 152  # 울산(ASOS)
+        region_id: L1160000  # 울산광역시
         office: true  # 지사 사무실 (울산 남구 매암로 28)
         site_count: 4
       - name: 양산
         lat: 35.3350
         lon: 129.0378
         stn: null
+        region_id: L1080500  # 양산시
         site_count: 1
         satellite: true
 
@@ -129,12 +148,14 @@ branches:
         lat: 37.5247
         lon: 129.1143
         stn: null
+        region_id: L1021900  # 동해시
         office: true  # 지사 사무실 (강원도 동해시 대동로 210)
         site_count: 1
       - name: 안인  # 안인발전소(강릉시 강동면). 관측지점은 강릉(ASOS) 공용
         lat: 37.7519
         lon: 128.8761
         stn: 105  # 강릉(ASOS)
+        region_id: L1022500  # 강릉시
         site_count: 1
         satellite: true
 
@@ -144,6 +165,7 @@ branches:
         lat: 36.0190
         lon: 129.3435
         stn: 138  # 포항(ASOS)
+        region_id: L1072400  # 포항시
         office: true  # 지사 사무실 (경북 포항시 남구 오천읍 냉천로 508)
         site_count: 3
 
@@ -153,6 +175,7 @@ branches:
         lat: 34.7936  # 대불부두 실주소는 영암군 삼호읍
         lon: 126.4830
         stn: null
+        region_id: L1052100  # 목포시(대불부두 실주소인 영암군 산지역 코드는 못 찾아 목포시로 대체)
         office: true  # 지사 사무실 (전남 영암군 삼호읍 대불로 629)
         site_count: 1
 
@@ -162,6 +185,7 @@ branches:
         lat: 36.8930
         lon: 126.6280
         stn: null
+        region_id: L1031200  # 당진시
         office: true  # 지사 사무실 (충남 당진시 석문면 대호만로 2424)
         site_count: 1
 
@@ -171,6 +195,7 @@ branches:
         lat: 34.9733
         lon: 128.3225
         stn: null
+        region_id: L1082300  # 경남 고성군 (강원 고성군 L1022200과 동명이인 — 혼동 주의)
         office: true  # 지사 사무실 (경남 고성군 하이면 하이로 1)
         site_count: 1
 
@@ -182,5 +207,6 @@ branches:
         lat: 33.4996
         lon: 126.5312
         stn: 184  # 제주(ASOS)
+        region_id: L1091300  # 제주시(산지 제외)
         office: true
         site_count: 0  # 실제 사업장 없음 — 참고 관측지점

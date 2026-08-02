@@ -546,6 +546,7 @@ with tab4:
                     markers_json = json.dumps(markers, ensure_ascii=False).replace("</", "<\\/")
 
                     map_html = f"""
+                    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
                     <div id="kakaoMap" style="width:100%; height:600px; border-radius:8px;"></div>
                     <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}&autoload=false"></script>
                     <script>

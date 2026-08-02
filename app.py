@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -24,6 +25,16 @@ from wordcloud import WordCloud
 
 import scoring as S
 import heatwave as HW
+
+# 온열질환·조치 현황 구글폼(GOOGLE_SHEET_CSV_URL이 읽는 그 폼)의 "지사" 문항을 URL
+# 파라미터로 미리 채워 여는 링크 — 구글폼 자체의 "URL 미리 채우기" 기능이라 폼이 안
+# 바뀌는 한 별도 유지보수가 필요 없다.
+_FORM_BASE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSe8QFLQbs3KwCUVMqHFv-C0gLVdDcILhcsctKUDHbHP8DgGRg/viewform"
+
+
+def _branch_form_url(branch: str) -> str:
+    return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
+
 
 # ------------------------------------------------------------------ 기본 설정
 st.set_page_config(page_title="현장안전 통합분석 대시보드", page_icon="🦺", layout="wide")
@@ -660,6 +671,7 @@ with tab4:
                 display_df["환자수"] = display_df["환자수"].map(lambda n: f"{int(n)}명")
                 display_df["작업조정"] = display_df["작업조정"].map(lambda n: f"{int(n)}건")
                 display_df["작업중지"] = display_df["작업중지"].map(lambda n: f"{int(n)}건")
+                display_df["보고"] = display_df["지사"].map(_branch_form_url)
 
                 def _highlight_issue(row):
                     if row["환자수"] != "0명" or row["작업조정"] != "0건" or row["작업중지"] != "0건":
@@ -669,11 +681,15 @@ with tab4:
                 st.dataframe(
                     display_df.style.apply(_highlight_issue, axis=1),
                     width="stretch", hide_index=True,
-                    column_config={"중지상세": st.column_config.TextColumn(width="large")},
+                    column_config={
+                        "중지상세": st.column_config.TextColumn(width="large"),
+                        "보고": st.column_config.LinkColumn("보고", display_text="📝 보고하기", width="small"),
+                    },
                 )
                 st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
                            "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음. "
-                           "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분).")
+                           "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분). "
+                           "\"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 새 탭에서 열립니다.")
 
             photos = HW.load_photo_reports()
             if not photos.empty:

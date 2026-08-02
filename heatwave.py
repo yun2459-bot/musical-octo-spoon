@@ -232,7 +232,7 @@ def map_clusters(obs: pd.DataFrame) -> list[dict]:
             if r.office or (r.site_count < SATELLITE_MIN_SITES and not r.satellite):
                 continue
             reading = _reading_or_estimate(latest, data_points, branch, r.city, r.lat, r.lon)
-            satellites.append({"city": r.city, "site_count": r.site_count, **reading})
+            satellites.append({"city": r.city, "site_count": r.site_count, "lat": r.lat, "lon": r.lon, **reading})
 
         clusters.append({
             "branch": branch, "city": office["city"], "lat": office["lat"], "lon": office["lon"],

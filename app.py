@@ -4,6 +4,7 @@ AI 기반 현장 안전 데이터 통합 분석 대시보드 (프로토타입)
 - 구성: ① 전사 현황  ② 지사 상세  (2개 탭, 안전관리자 친화적 단순화)
 실행:  streamlit run app.py
 """
+import base64
 import html
 import json
 import os
@@ -461,101 +462,116 @@ with tab4:
 
             with col_map:
                 st.subheader("🗺️ 지사별 폭염 현황 지도")
-                svg_uri = HW.korea_svg_data_uri()
-                if svg_uri is None or not clusters:
-                    st.info("지도 배경 SVG 또는 사업장 좌표가 없습니다. `Map_of_South_Korea-blank.svg`와 "
-                            "`config/sites.yaml`을 확인해주세요.")
+                kakao_key = st.secrets.get("KAKAO_JS_KEY", "")
+                if not kakao_key:
+                    st.info("카카오맵 API 키(KAKAO_JS_KEY)가 secrets에 없어 지도를 표시할 수 없습니다. "
+                            "`.streamlit/secrets.toml`(로컬) 또는 Streamlit Cloud의 Secrets 설정에 등록해주세요.")
+                elif not clusters:
+                    st.info("사업장 좌표가 없습니다. `config/sites.yaml`을 확인해주세요.")
                 else:
-                    # 지사 사무실은 실제 좌표에 큰 원으로, 규모 있는(사업장 2개+) 부속 사업장은 사무실
-                    # 원 옆에 붙는 작은 막대로 표시한다 — 부속 막대는 위치가 정확하지 않아도 되므로
-                    # 실제 좌표 대신 사무실 원에 종속된 형태로 붙여서 "딸린 사업장" 느낌을 준다.
-                    #
-                    # 경북·울산·부산·경남·삼천포·광양은 실제로도 지리적으로 가까워 원/라벨이 서로
-                    # 겹친다 — 실제 좌표는 그대로 두고 화면 표시 위치만 픽셀 단위로 살짝 벌린다
-                    # (지도 크기 460x690 기준. 안 맞으면 이 값만 조절하면 됨).
-                    PIN_NUDGE_PX = {
-                        "경북": (10, -14),
-                        "울산": (16, -7),
-                        "부산": (31, 13),
-                        "경남": (-4, 12),
-                        "삼천포": (-22, 23),
-                        "광양": (-17, 10),
-                    }
-                    pins_html = []
-                    for c in clusters:
-                        left, top = HW.latlon_to_svg_pct(c["lat"], c["lon"])
-                        nudge_x, nudge_y = PIN_NUDGE_PX.get(c["branch"], (0, 0))
-                        color = HW.level_color(c["level"])
-                        est_prefix = "~" if c.get("is_estimate") else ""
-                        badge = f'{est_prefix}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
-                        if c["has_data"] and c.get("is_estimate"):
-                            detail = (f'{c["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
-                                       f'{c["estimate_source"]} {c["estimate_km"]:.0f}km 값 사용)')
-                        elif c["has_data"]:
-                            detail = f'{c["apparent_temp"]:.1f}℃ ({HW.level_label(c["level"])})'
+                    def _marker_detail(d: dict) -> str:
+                        if not d["has_data"]:
+                            return "관측 데이터 없음"
+                        prefix = "~" if d.get("is_estimate") else ""
+                        if d.get("is_estimate"):
+                            text = (f'{prefix}{d["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
+                                    f'{d["estimate_source"]} {d["estimate_km"]:.0f}km 값 사용)')
                         else:
-                            detail = "관측 데이터 없음"
-                        official_advisory = c.get("official_advisory")
-                        if official_advisory:
-                            detail += f' · 기상청 공식 폭염{official_advisory} 발효중'
-                        title = f'{c["branch"]} {c["city"]}(사무실) · {detail}'
-                        border_style = "2px dashed white" if c.get("is_estimate") else "2px solid white"
+                            text = f'{prefix}{d["apparent_temp"]:.1f}℃ ({HW.level_label(d["level"])})'
+                        if d.get("official_advisory"):
+                            text += f' · 기상청 공식 폭염{d["official_advisory"]} 발효중'
+                        return text
 
-                        satellites_html = ""
-                        for s in c["satellites"]:
-                            s_color = HW.level_color(s["level"])
-                            s_est = "~" if s.get("is_estimate") else ""
-                            s_badge = f'{s_est}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
-                            if s["has_data"] and s.get("is_estimate"):
-                                s_detail = (f'{s["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
-                                             f'{s["estimate_source"]} {s["estimate_km"]:.0f}km 값 사용)')
-                            elif s["has_data"]:
-                                s_detail = f'{s["apparent_temp"]:.1f}℃ ({HW.level_label(s["level"])})'
-                            else:
-                                s_detail = "관측 데이터 없음"
-                            s_title = f'{c["branch"]} {s["city"]}(부속, {s["site_count"]}개소) · {s_detail}'
-                            s_border = "1.5px dashed white" if s.get("is_estimate") else "1.5px solid white"
-                            satellites_html += (
-                                f'<div style="display:flex; flex-direction:column; align-items:center; margin-left:3px;">'
-                                f'<div title="{s_title}" style="width:20px; height:30px; background:{s_color}; '
-                                f'border-radius:4px 4px 0 0; display:flex; align-items:center; justify-content:center; '
-                                f'font-size:8px; color:white; font-weight:700; border:{s_border}; '
-                                f'border-bottom:none; box-shadow:0 1px 3px rgba(0,0,0,.3);">{s_badge}</div>'
-                                f'<div style="font-size:7px; color:#444; background:rgba(255,255,255,.85); '
-                                f'padding:0 2px; white-space:nowrap; border-radius:0 0 3px 3px;">{s["city"]}</div>'
-                                f'</div>'
-                            )
+                    def _marker_image(color: str, badge: str, label: str, is_estimate: bool, is_office: bool):
+                        """원(체감온도 배지) + 아래 라벨 칩을 SVG 하나로 그려 data URI로 반환.
 
-                        pins_html.append(
-                            f'<div style="position:absolute; left:{left:.3f}%; top:{top:.3f}%; '
-                            f'transform:translate(calc(-50% + {nudge_x}px), calc(-100% + {nudge_y}px)); '
-                            f'text-align:center; font-family:sans-serif; z-index:2;">'
-                            f'<div style="display:flex; align-items:flex-end; justify-content:center;">'
-                            f'<div title="{title}" style="background:{color}; color:white; border-radius:50%; '
-                            f'width:42px; height:42px; display:flex; align-items:center; justify-content:center; '
-                            f'font-size:14px; font-weight:700; border:{border_style}; '
-                            f'box-shadow:0 1px 4px rgba(0,0,0,.35); flex-shrink:0;">{badge}</div>'
-                            f'{satellites_html}'
-                            f'</div>'
-                            f'<div style="font-size:10px; margin-top:2px; color:#111; font-weight:700; '
-                            f'background:rgba(255,255,255,.85); border-radius:4px; padding:0 3px; white-space:nowrap;">'
-                            f'{"🚨 " if official_advisory else ""}{c["branch"]}</div>'
-                            f'</div>'
+                        카카오맵 CustomOverlay(임의 HTML 오버레이)가 이 배포 환경에서 DOM에 붙지
+                        않는 문제가 있어(마커 자체는 정상 동작 확인됨), 오버레이 대신 SVG를 구운
+                        마커 이미지로 대체했다 — 렌더링을 브라우저의 기본 <img> 디코딩에 맡기므로
+                        더 안정적이다. 반환값: (data URI, 전체폭, 전체높이, 앵커x, 앵커y) — 앵커는
+                        원의 중심(=실제 좌표가 가리키는 지점)이다.
+                        """
+                        d = 42 if is_office else 28
+                        font_size = 14 if is_office else 10
+                        label_font = 10
+                        label_w = max(d + 6, len(label) * 9 + 10)
+                        label_h = 15
+                        gap = 3
+                        w, h = max(d, label_w), d + gap + label_h
+                        cx, cy = w / 2, d / 2
+                        dash = ' stroke-dasharray="4,3"' if is_estimate else ""
+                        badge_e, label_e = html.escape(badge), html.escape(label)
+                        svg = (
+                            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
+                            f'<circle cx="{cx}" cy="{cy}" r="{d / 2 - 1.5}" fill="{color}" '
+                            f'stroke="white" stroke-width="2"{dash}/>'
+                            f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
+                            f'font-size="{font_size}" font-weight="700" fill="white" '
+                            f'font-family="sans-serif">{badge_e}</text>'
+                            f'<rect x="{cx - label_w / 2}" y="{d + gap}" width="{label_w}" height="{label_h}" '
+                            f'rx="3" fill="white" fill-opacity="0.85"/>'
+                            f'<text x="{cx}" y="{d + gap + label_h / 2}" text-anchor="middle" '
+                            f'dominant-baseline="central" font-size="{label_font}" font-weight="700" '
+                            f'fill="#111" font-family="sans-serif">{label_e}</text>'
+                            f'</svg>'
                         )
+                        uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+                        return uri, round(w), round(h), round(cx), round(cy)
 
-                    # SVG viewBox가 800x1200(비율 2:3)이므로, 래퍼도 정확히 같은 비율의 고정 픽셀
-                    # 크기로 만들어야 left/top(%) 핀 좌표가 이미지 위에 정확히 겹친다.
-                    # (2컬럼 레이아웃이라 폭을 좁혀 col_map 안에 들어가도록 맞춤)
-                    map_w, map_h = 460, 690
-                    map_html = (
-                        '<html><body style="margin:0;">'
-                        f'<div style="position:relative; width:{map_w}px; height:{map_h}px; margin:0 auto;">'
-                        f'<img src="{svg_uri}" style="position:absolute; top:0; left:0; width:{map_w}px; '
-                        f'height:{map_h}px; display:block;" />'
-                        f'{"".join(pins_html)}'
-                        '</div></body></html>'
-                    )
-                    components.html(map_html, height=map_h + 20, scrolling=False)
+                    # 실제 좌표에 마커를 찍는 진짜 지도라, 예전 정적 SVG 버전에서 필요했던
+                    # "겹치지 않게 픽셀 단위로 손으로 미는" 보정이 더 이상 필요 없다 — 카카오맵
+                    # 자체 줌/팬으로 사용자가 겹친 구간을 직접 확대해서 볼 수 있다.
+                    markers = []
+                    for c in clusters:
+                        badge = f'{"~" if c.get("is_estimate") else ""}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
+                        label = ("🚨 " if c.get("official_advisory") else "") + c["branch"]
+                        img, w, h, ax, ay = _marker_image(HW.level_color(c["level"]), badge, label,
+                                                           bool(c.get("is_estimate")), True)
+                        markers.append({
+                            "lat": c["lat"], "lon": c["lon"], "img": img, "w": w, "h": h, "ax": ax, "ay": ay,
+                            "title": f'{c["branch"]} {c["city"]}(사무실) · {_marker_detail(c)}',
+                        })
+                        for s in c["satellites"]:
+                            s_badge = f'{"~" if s.get("is_estimate") else ""}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
+                            s_img, s_w, s_h, s_ax, s_ay = _marker_image(
+                                HW.level_color(s["level"]), s_badge, s["city"], bool(s.get("is_estimate")), False)
+                            markers.append({
+                                "lat": s["lat"], "lon": s["lon"], "img": s_img, "w": s_w, "h": s_h,
+                                "ax": s_ax, "ay": s_ay,
+                                "title": f'{c["branch"]} {s["city"]}(부속, {s["site_count"]}개소) · {_marker_detail(s)}',
+                            })
+
+                    # 마커 JSON을 <script> 안에 그대로 박아 넣으므로, 값에 우연히 "</script>"가
+                    # 섞여 있어도 태그가 조기 종료되지 않도록 이스케이프한다.
+                    markers_json = json.dumps(markers, ensure_ascii=False).replace("</", "<\\/")
+
+                    map_html = f"""
+                    <div id="kakaoMap" style="width:100%; height:600px; border-radius:8px;"></div>
+                    <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}&autoload=false"></script>
+                    <script>
+                    kakao.maps.load(function () {{
+                        var container = document.getElementById('kakaoMap');
+                        var map = new kakao.maps.Map(container, {{
+                            center: new kakao.maps.LatLng(36.2, 127.9), level: 12,
+                        }});
+                        map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+
+                        var markers = {markers_json};
+                        var bounds = new kakao.maps.LatLngBounds();
+                        markers.forEach(function (m) {{
+                            var pos = new kakao.maps.LatLng(m.lat, m.lon);
+                            bounds.extend(pos);
+                            var image = new kakao.maps.MarkerImage(
+                                m.img, new kakao.maps.Size(m.w, m.h),
+                                {{offset: new kakao.maps.Point(m.ax, m.ay)}}
+                            );
+                            new kakao.maps.Marker({{position: pos, map: map, image: image, title: m.title}});
+                        }});
+                        map.setBounds(bounds);
+                    }});
+                    </script>
+                    """
+                    components.html(map_html, height=615, scrolling=False)
 
                     leg1, leg2, leg3, leg4 = st.columns(4)
                     for col, (lvl, label) in zip(
@@ -566,10 +582,10 @@ with tab4:
                             f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
                             f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}',
                             unsafe_allow_html=True)
-                    st.caption("큰 원 = 지사 사무실(실제 위치). 옆에 붙은 작은 막대 = 규모 있는(사업장 2곳 이상) 또는 "
-                               "수동 지정한 부속 사업장(위치는 사무실에 종속 표시, 실제 좌표 아님). "
+                    st.caption("큰 원 = 지사 사무실. 작은 원 = 규모 있는(사업장 2곳 이상) 또는 수동 지정한 부속 "
+                               "사업장 — 실제 좌표에 표시되므로 겹쳐 보이면 지도를 확대해서 구분하세요. "
                                "점선 테두리 + \"~숫자\" = 그 도시 자체 관측지점이 없어 가장 가까운 실측 지점 값으로 "
-                               "추정한 온도(호버하면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다. "
+                               "추정한 온도(마우스를 올리면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다. "
                                "🚨 = 기상청이 그 지역에 폭염특보(주의보/경보/중대경보)를 공식 발효 중 — 저희가 계산한 "
                                "체감온도 단계와 다를 수 있습니다(공식 특보는 하루 예보 기준, 저희 값은 지금 이 순간의 실측값).")
 

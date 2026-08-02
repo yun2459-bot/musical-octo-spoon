@@ -87,7 +87,8 @@ if FONT_PATH:
     except Exception:
         FONT_PATH = None
 
-BLUE = "#4C78A8"
+# 차트 강조색은 브랜드 그린으로 통일(급증 워드클라우드·게이지 스텝 등 의미색은 그대로 둠).
+CHART_ACCENT = SEBANG_GREEN
 
 
 @st.cache_data
@@ -211,7 +212,7 @@ with tab1:
         fig = px.bar(ri_sorted, x=basis, y="지사", orientation="h",
                      text=basis, height=430,
                      hover_data=["지적건수", "평균심각도", "안전관리자수", "사업장수"])
-        fig.update_traces(marker_color=BLUE, textposition="outside", cliponaxis=False)
+        fig.update_traces(marker_color=CHART_ACCENT, textposition="outside", cliponaxis=False)
         fig.update_layout(margin=dict(l=0, r=30, t=30, b=0),
                           xaxis_title="", yaxis_title="",
                           title=f"지사별 위험·점검활동 지수 ({basis_label})")
@@ -298,17 +299,17 @@ with tab2:
         gfig = go.Figure(go.Indicator(
             mode="gauge+number", value=val, title={"text": f"{sel} 위험·활동 지수"},
             gauge={"axis": {"range": [0, 100]},
-                   "bar": {"color": BLUE},
-                   "steps": [{"range": [0, 50], "color": "#eef3f8"},
-                             {"range": [50, 80], "color": "#dbe6f1"},
-                             {"range": [80, 100], "color": "#c3d5e8"}]}))
+                   "bar": {"color": CHART_ACCENT},
+                   "steps": [{"range": [0, 50], "color": "#F2F3F3"},
+                             {"range": [50, 80], "color": SEBANG_LIGHT_GRAY_1},
+                             {"range": [80, 100], "color": SEBANG_LIGHT_GRAY_2}]}))
         gfig.update_layout(height=260, margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(gfig, use_container_width=True)
         st.caption(f"점검 {int(rrow['지적건수'])}건 · 평균 심각도 {rrow['평균심각도']:.2f} · "
                    f"사업장 {int(rrow['사업장수'])}곳 · 안전관리자 {int(rrow['안전관리자수'])}명")
         st.markdown("**위험분류별 지적 분포**")
         vc = dfb[dfb["위험분류"].isin(S.PHYSICAL_HAZARDS)]["위험분류"].value_counts()
-        st.bar_chart(vc, height=240, color=BLUE)
+        st.bar_chart(vc, height=240, color=CHART_ACCENT)
     with cB:
         st.markdown("**동적 워드클라우드** — 🔴급증 · 🟠증가 · ⚪안정 (최근 60일 대비) · 상위 30개 단어")
         w1, w2 = st.columns(2)
@@ -410,10 +411,10 @@ with tab3:
     dc1, dc2 = st.columns(2)
     with dc1:
         st.markdown("**어떤 위험을 점검했나** (위험분류 분포)")
-        st.bar_chart(det["위험분류분포"], color=BLUE, height=240)
+        st.bar_chart(det["위험분류분포"], color=CHART_ACCENT, height=240)
     with dc2:
         st.markdown("**어느 사업장에서 점검했나** (사업장 분포)")
-        st.bar_chart(det["사업장분포"], color=BLUE, height=240)
+        st.bar_chart(det["사업장분포"], color=CHART_ACCENT, height=240)
     if det["소외위험"]:
         st.warning(f"🔎 **{who}**님이 최근 한 번도 다루지 않은 물리위험: **{', '.join(det['소외위험'])}** "
                    "→ 다음 점검 시 의식적으로 확인 권장")
@@ -434,7 +435,7 @@ with tab3:
             id_vars="위험분류", value_vars=["점검비중", "사고비중"],
             var_name="구분", value_name="비중")
         figg = px.bar(gm, x="위험분류", y="비중", color="구분", barmode="group", height=380,
-                      color_discrete_map={"점검비중": "#4c78a8", "사고비중": "#e45756"})
+                      color_discrete_map={"점검비중": SEBANG_GREEN, "사고비중": "#e45756"})
         figg.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend_title="", yaxis_title="비중(%)")
         st.plotly_chart(figg, use_container_width=True)
         over = gb[gb["갭(사고-점검)"] > 5]

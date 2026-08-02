@@ -572,20 +572,20 @@ with tab4:
                     }});
                     </script>
                     """
-                    leg_col, map_col = st.columns([1, 4])
+                    map_col, leg_col = st.columns([6, 1])
+                    with map_col:
+                        components.html(map_html, height=615, scrolling=False)
                     with leg_col:
                         for lvl, label in [(None, "정상"), ("주의", "주의 33℃+"),
                                             ("경고", "경고 35℃+"), ("위험", "위험 38℃+")]:
                             st.markdown(
-                                f'<div style="margin-bottom:10px; white-space:nowrap;">'
+                                f'<div style="margin-bottom:6px; white-space:nowrap;">'
                                 f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
                                 f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}</div>',
                                 unsafe_allow_html=True)
                         st.markdown(
-                            '<div style="font-size:12px; color:#666; margin-top:14px;">🚨 = 폭염특보 발생</div>',
+                            '<div style="font-size:12px; color:#666; margin-top:10px;">🚨 = 폭염특보 발생</div>',
                             unsafe_allow_html=True)
-                    with map_col:
-                        components.html(map_html, height=615, scrolling=False)
 
             with col_kpi:
                 st.subheader("🔥 현재 최고 체감온도 지사")

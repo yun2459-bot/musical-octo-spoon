@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -24,6 +25,16 @@ from wordcloud import WordCloud
 
 import scoring as S
 import heatwave as HW
+
+# 온열질환·조치 현황 구글폼(GOOGLE_SHEET_CSV_URL이 읽는 그 폼)의 "지사" 문항을 URL
+# 파라미터로 미리 채워 여는 링크 — 구글폼 자체의 "URL 미리 채우기" 기능이라 폼이 안
+# 바뀌는 한 별도 유지보수가 필요 없다.
+_FORM_BASE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSe8QFLQbs3KwCUVMqHFv-C0gLVdDcILhcsctKUDHbHP8DgGRg/viewform"
+
+
+def _branch_form_url(branch: str) -> str:
+    return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
+
 
 # ------------------------------------------------------------------ 기본 설정
 st.set_page_config(page_title="현장안전 통합분석 대시보드", page_icon="🦺", layout="wide")
@@ -532,6 +543,11 @@ with tab4:
                             "title": f'{c["branch"]} {c["city"]}(사무실) · {_marker_detail(c)}',
                         })
                         for s in c["satellites"]:
+                            # 창원(진해, 부산 부속)는 경남 지사 사무실과 좌표가 같아져서(2026-08-02
+                            # 좌표 정정) 라벨이 겹쳐 보인다 — 지도 표시만 생략(체감온도 계산·부산
+                            # 지사 대표값 산정 등 다른 로직에는 계속 사용됨).
+                            if s["city"] == "창원(진해)":
+                                continue
                             s_badge = f'{"~" if s.get("is_estimate") else ""}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
                             s_img, s_w, s_h, s_ax, s_ay = _marker_image(
                                 HW.level_color(s["level"]), s_badge, s["city"], bool(s.get("is_estimate")), False)
@@ -655,6 +671,7 @@ with tab4:
                 display_df["환자수"] = display_df["환자수"].map(lambda n: f"{int(n)}명")
                 display_df["작업조정"] = display_df["작업조정"].map(lambda n: f"{int(n)}건")
                 display_df["작업중지"] = display_df["작업중지"].map(lambda n: f"{int(n)}건")
+                display_df["보고"] = display_df["지사"].map(_branch_form_url)
 
                 def _highlight_issue(row):
                     if row["환자수"] != "0명" or row["작업조정"] != "0건" or row["작업중지"] != "0건":
@@ -664,11 +681,15 @@ with tab4:
                 st.dataframe(
                     display_df.style.apply(_highlight_issue, axis=1),
                     width="stretch", hide_index=True,
-                    column_config={"중지상세": st.column_config.TextColumn(width="large")},
+                    column_config={
+                        "중지상세": st.column_config.TextColumn(width="large"),
+                        "보고": st.column_config.LinkColumn("보고", display_text="📝 보고하기", width="small"),
+                    },
                 )
                 st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
                            "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음. "
-                           "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분).")
+                           "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분). "
+                           "\"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 새 탭에서 열립니다.")
 
             photos = HW.load_photo_reports()
             if not photos.empty:
@@ -749,6 +770,39 @@ with tab4:
                     for col in cols[len(chunk):]:
                         col.empty()
             st.caption("체감온도 기준(세방 SAFETY TF): 주의 33℃ · 경고 35℃ · 위험 38℃ · 배지 온도는 지사 내 도시 중 최고값입니다.")
+
+            with st.expander("⚖️ 고용노동부 규정 개정 참고사항"):
+                st.markdown(
+                    "**세방 SAFETY TF(사내 기준)**: 주의 33℃ · 경고 35℃ · 위험 38℃\n\n"
+                    "2025년 7월 17일 「산업안전보건기준에 관한 규칙」 개정으로 **체감온도 31℃ 이상을 "
+                    "'폭염 작업'으로 정의**하고, 그 구간에서 체감온도 측정·기록과 조치(냉방·통풍장치/"
+                    "작업시간 조정/휴식 중 1개 이상) 이행이 법적 의무가 됐습니다."
+                )
+                st.warning(
+                    "⚠️ **찾아보니 자료마다 단계 이름·추가 온도 구간(33℃ 이상 구간의 세부 의무 등)이 "
+                    "서로 다르게 나옵니다** — 개정 과정에서 일부 조항(2시간마다 20분 휴식 등)이 "
+                    "규제개혁위원회 철회 권고를 거치는 등 수정이 있었던 것으로 보여, 최종 확정된 "
+                    "정확한 단계 구성을 여기서 단정하지 않았습니다. **31~32℃ 구간이 이 대시보드에는 "
+                    "'정상'(초록색)으로 표시되지만, 법적으로는 이미 '폭염 작업' 구간(조치 의무 발생)일 "
+                    "수 있다는 점만 확실하니**, 정확한 단계별 기준은 moel.go.kr 원문이나 사내 법무·"
+                    "노무 담당자를 통해 직접 확인하시고, 필요하면 사내 기준 정렬 여부를 검토해보시길 "
+                    "권합니다(임계값 자체를 바꾸는 건 알림 발송 시점이 바뀌는 운영 결정이라 제가 "
+                    "임의로 바꾸지 않았습니다).",
+                    icon="⚠️",
+                )
+                st.caption("출처: 고용노동부 정책자료(2025.7), 김·장 법률사무소 규정 해설 등 — 개정 진행 "
+                           "경과가 있어 법령 원문(moel.go.kr) 확인을 권합니다.")
+
+            with st.expander("🚑 온열질환 응급처치 빠른 참조"):
+                st.markdown("""
+| 질환 | 주요 증상 | 응급처치 |
+|---|---|---|
+| **열사병**(응급, 즉시 119) | 의식저하·헛소리, 체온 40℃↑, 피부가 뜨겁고 건조함 | 즉시 119 신고 → 그늘/에어컨 공간으로 이동 → 옷을 벗기고 물을 뿌리며 부채질 등 적극적으로 체온을 낮춤 → **의식이 없으면 음료를 먹이지 않음** |
+| **열탈진** | 어지럼증·두통·메스꺼움, 많은 땀 | 그늘로 이동, 옷을 헐렁하게, 시원한 물을 조금씩 섭취, 30분 내 호전 없으면 병원 이송 |
+| **열경련** | 팔다리·복부 근육 경련 | 그늘에서 휴식, 이온음료나 물 섭취, 경련 부위 스트레칭 |
+| **열실신** | 어지럼증과 함께 순간적인 의식 소실 | 시원한 곳에 눕히고 다리를 심장보다 높게 올림 |
+""")
+                st.caption("출처: 질병관리청·고용노동부 공개 자료 기준 일반 응급처치 요령. 실제 상황에서는 항상 119 신고를 우선하세요.")
 
             st.markdown("---")
             st.subheader("📈 주차별 최고 체감온도 추이 (지사별)")

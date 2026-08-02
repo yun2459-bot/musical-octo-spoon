@@ -532,6 +532,11 @@ with tab4:
                             "title": f'{c["branch"]} {c["city"]}(사무실) · {_marker_detail(c)}',
                         })
                         for s in c["satellites"]:
+                            # 창원(진해, 부산 부속)는 경남 지사 사무실과 좌표가 같아져서(2026-08-02
+                            # 좌표 정정) 라벨이 겹쳐 보인다 — 지도 표시만 생략(체감온도 계산·부산
+                            # 지사 대표값 산정 등 다른 로직에는 계속 사용됨).
+                            if s["city"] == "창원(진해)":
+                                continue
                             s_badge = f'{"~" if s.get("is_estimate") else ""}{s["apparent_temp"]:.0f}°' if s["has_data"] else "–"
                             s_img, s_w, s_h, s_ax, s_ay = _marker_image(
                                 HW.level_color(s["level"]), s_badge, s["city"], bool(s.get("is_estimate")), False)

@@ -571,23 +571,20 @@ with tab4:
                     }});
                     </script>
                     """
-                    components.html(map_html, height=615, scrolling=False)
-
-                    leg1, leg2, leg3, leg4 = st.columns(4)
-                    for col, (lvl, label) in zip(
-                        (leg1, leg2, leg3, leg4),
-                        [(None, "정상"), ("주의", "주의 33℃+"), ("경고", "경고 35℃+"), ("위험", "위험 38℃+")],
-                    ):
-                        col.markdown(
-                            f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-                            f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}',
+                    leg_col, map_col = st.columns([1, 4])
+                    with leg_col:
+                        for lvl, label in [(None, "정상"), ("주의", "주의 33℃+"),
+                                            ("경고", "경고 35℃+"), ("위험", "위험 38℃+")]:
+                            st.markdown(
+                                f'<div style="margin-bottom:10px; white-space:nowrap;">'
+                                f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+                                f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}</div>',
+                                unsafe_allow_html=True)
+                        st.markdown(
+                            '<div style="font-size:12px; color:#666; margin-top:14px;">🚨 = 폭염특보 발생</div>',
                             unsafe_allow_html=True)
-                    st.caption("큰 원 = 지사 사무실. 작은 원 = 규모 있는(사업장 2곳 이상) 또는 수동 지정한 부속 "
-                               "사업장 — 실제 좌표에 표시되므로 겹쳐 보이면 지도를 확대해서 구분하세요. "
-                               "점선 테두리 + \"~숫자\" = 그 도시 자체 관측지점이 없어 가장 가까운 실측 지점 값으로 "
-                               "추정한 온도(마우스를 올리면 어느 지점 값인지 표시). 실선 = 그 도시 자체 실측값입니다. "
-                               "🚨 = 기상청이 그 지역에 폭염특보(주의보/경보/중대경보)를 공식 발효 중 — 저희가 계산한 "
-                               "체감온도 단계와 다를 수 있습니다(공식 특보는 하루 예보 기준, 저희 값은 지금 이 순간의 실측값).")
+                    with map_col:
+                        components.html(map_html, height=615, scrolling=False)
 
             with col_kpi:
                 st.subheader("🔥 현재 최고 체감온도 지사")

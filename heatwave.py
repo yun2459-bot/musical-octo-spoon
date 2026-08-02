@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+import streamlit as st
 import yaml
 
 HEATWAVE_DATA_DIR = Path(__file__).parent / "heatwave_data"
@@ -408,11 +409,15 @@ def _parse_google_timestamp(raw) -> pd.Timestamp:
     return pd.to_datetime(raw, errors="coerce")
 
 
+@st.cache_data(ttl=300)
 def load_incident_reports_raw() -> pd.DataFrame | None:
     """구글폼 응답 시트를 읽어 제출행 전부(지사별 중복 제거 없이) 반환 — 누적 집계용.
 
     시트 헤더는 폼 문항 텍스트를 그대로 쓴다는 전제로 매칭한다. URL 미설정이거나
     조회 실패, 필요한 컬럼이 없으면 None을 반환해 호출부가 기본값으로 폴백하게 한다.
+
+    5분 캐시: 이 함수 하나를 patient_summary/today_stoppages/incident_status가 전부
+    호출하므로, 캐시가 없으면 화면 한 번 그릴 때마다 같은 시트를 3~4번 중복 다운로드한다.
     """
     if not GOOGLE_SHEET_CSV_URL:
         return None
@@ -539,11 +544,19 @@ def _drive_thumbnail_url(link: str, size: int = 500) -> str | None:
     return f"https://drive.google.com/thumbnail?id={m.group(1)}&sz=w{size}"
 
 
+# 캐러셀에 실제로 그리는 사진 수 상한 — 시즌 내내 제한 없이 쌓이면 <img> 태그가
+# 계속 늘어나(각각 구글 드라이브로 네트워크 요청) 페이지가 점점 무거워진다.
+MAX_CAROUSEL_PHOTOS = 24
+
+
+@st.cache_data(ttl=300)
 def load_photo_reports() -> pd.DataFrame:
-    """현장 사진 전용 구글폼(별도 폼) 응답 -> (branch, photo_url, timestamp) 목록.
+    """현장 사진 전용 구글폼(별도 폼) 응답 -> (branch, photo_url, timestamp) 최신순 상위
+    MAX_CAROUSEL_PHOTOS건.
 
     PHOTO_SHEET_CSV_URL이 비어있거나 제출이 없으면 빈 DataFrame을 반환한다
-    (호출부는 이 경우 캐러셀을 안전하게 숨긴다).
+    (호출부는 이 경우 캐러셀을 안전하게 숨긴다). 5분 캐시로 화면 조작마다
+    전체 시트를 다시 받는 걸 막는다.
     """
     cols = ["branch", "photo_url", "timestamp"]
     if not PHOTO_SHEET_CSV_URL:
@@ -581,7 +594,8 @@ def load_photo_reports() -> pd.DataFrame:
 
     if not rows:
         return pd.DataFrame(columns=cols)
-    return pd.DataFrame(rows).sort_values("timestamp", ascending=False).reset_index(drop=True)
+    return (pd.DataFrame(rows).sort_values("timestamp", ascending=False)
+            .head(MAX_CAROUSEL_PHOTOS).reset_index(drop=True))
 
 
 def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:

@@ -4,6 +4,7 @@ AI 기반 현장 안전 데이터 통합 분석 대시보드 (프로토타입)
 - 구성: ① 전사 현황  ② 지사 상세  (2개 탭, 안전관리자 친화적 단순화)
 실행:  streamlit run app.py
 """
+import html
 import json
 import os
 import re
@@ -105,7 +106,7 @@ st.sidebar.caption("세방(주) · 프로토타입")
 # 브라우저 F5(하드 새로고침)는 새 세션을 만들어 _check_password()의 session_state가
 # 초기화되므로 비밀번호를 다시 묻는다. 이 버튼은 스크립트만 재실행(st.rerun)해서
 # 같은 세션을 유지한 채 캐시된 데이터만 최신화한다.
-if st.sidebar.button("🔄 새로고침", use_container_width=True,
+if st.sidebar.button("🔄 새로고침", width="stretch",
                       help="비밀번호 재입력 없이 화면과 데이터만 최신 상태로 다시 불러옵니다."):
     st.cache_data.clear()
     st.rerun()
@@ -136,7 +137,7 @@ SYNC_SUMMARY_PATH = Path(__file__).parent / "data" / "_last_sync_summary.json"
 # 클라우드 배포판은 이 자격증명도, Downloads 폴더의 원본 파일도, 사내망 접근도 없어
 # 눌러도 100% 실패하므로 아예 노출하지 않는다.
 if os.environ.get("GSAFETY_ID") and os.environ.get("GSAFETY_PW"):
-    if st.sidebar.button("🔄 최신 점검 데이터 동기화", use_container_width=True,
+    if st.sidebar.button("🔄 최신 점검 데이터 동기화", width="stretch",
                           help="gsafety.kr에서 지사 점검 데이터를 가져와 누적본에 반영합니다(수 분 소요)"):
         with st.sidebar:
             with st.spinner("사이트 로그인 → 신규 데이터 조회 → 정제·마스킹 재실행 중..."):
@@ -176,7 +177,7 @@ if "sync_result" in st.session_state:
                         "인적재해(누적)": int((b_acc["재해성격"] == "인적재해").sum()),
                         "재물·차량사고(누적)": int((b_acc["재해성격"] == "재물·차량사고").sum()),
                     })
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 # ------------------------------------------------------------------ 공통 계산
 ri = S.branch_risk_index(insp, period, severity_col=SEV_COL)
@@ -216,7 +217,7 @@ with tab1:
         fig.update_layout(margin=dict(l=0, r=30, t=30, b=0),
                           xaxis_title="", yaxis_title="",
                           title=f"지사별 위험·점검활동 지수 ({basis_label})")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("높다고 위험한 지사가 아니라, 위험을 많이 발굴했거나 규모가 큰 지사일 수 있습니다. "
                    "오른쪽 '양 vs 질'로 나눠서 보세요.")
     with c2:
@@ -229,7 +230,7 @@ with tab1:
         fig.add_hline(y=ri["평균심각도"].median(), line_dash="dot", line_color="gray")
         fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
                           xaxis_title="점검 건수(활동량)", yaxis_title="평균 심각도(위험 정도)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("오른쪽 = 점검 활발(바람직) · 위쪽 = 심각한 지적 비중 높음. "
                    "'점검을 많이 한 것'과 '위험이 심각한 것'은 다릅니다.")
 
@@ -237,7 +238,7 @@ with tab1:
         st.dataframe(
             ri[["지사", "지적건수", "평균심각도", "안전관리자수", "사업장수",
                 "위험지수", "사업장당지수", "관리자당지수"]],
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)
 
 # ================================================================== TAB2 지사 상세
 # 워드클라우드 불용어 — 문법 조각 · 점검 '과정' 메타어 · 지명
@@ -304,7 +305,7 @@ with tab2:
                              {"range": [50, 80], "color": SEBANG_LIGHT_GRAY_1},
                              {"range": [80, 100], "color": SEBANG_LIGHT_GRAY_2}]}))
         gfig.update_layout(height=260, margin=dict(l=10, r=10, t=50, b=10))
-        st.plotly_chart(gfig, use_container_width=True)
+        st.plotly_chart(gfig, width="stretch")
         st.caption(f"점검 {int(rrow['지적건수'])}건 · 평균 심각도 {rrow['평균심각도']:.2f} · "
                    f"사업장 {int(rrow['사업장수'])}곳 · 안전관리자 {int(rrow['안전관리자수'])}명")
         st.markdown("**위험분류별 지적 분포**")
@@ -339,7 +340,7 @@ with tab2:
             st.success("최근 점검에서 놓친 과거재해 위험분류가 없습니다.")
         else:
             st.dataframe(bsb[["위험분류", "과거재해", "최근점검", "상태"]],
-                         use_container_width=True, hide_index=True, height=220)
+                         width="stretch", hide_index=True, height=220)
     with cc2:
         st.subheader("📜 과거 인적재해 이력")
         pa = acc[(acc["지사"] == sel) & (acc["재해성격"] == "인적재해")]
@@ -349,7 +350,7 @@ with tab2:
             st.caption(f"총 {len(pa)}건 (산재 {int((pa['산재구분']=='산재').sum())} · "
                        f"공상 {int((pa['산재구분']=='공상').sum())})")
             hist = pa.groupby("위험분류").size().sort_values(ascending=False).reset_index(name="건수")
-            st.dataframe(hist, use_container_width=True, hide_index=True, height=220)
+            st.dataframe(hist, width="stretch", hide_index=True, height=220)
 
     # ---- 분류 재검토 제안 (AI 텍스트 분석) ----
     st.markdown("---")
@@ -367,13 +368,13 @@ with tab2:
         st.dataframe(
             mis_b[["위험분류", "위험분류_재검토", "지적내용"]].rename(
                 columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)
     if not mis_all.empty:
         with st.expander(f"🔎 전사 재검토 후보 전체 {len(mis_all)}건 — 지사 간 분류 일관성 점검"):
             st.dataframe(
                 mis_all[["지사", "위험분류", "위험분류_재검토", "지적내용"]].rename(
                     columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
-                use_container_width=True, hide_index=True)
+                width="stretch", hide_index=True)
 
 # ================================================================== TAB3 점검 편향분석
 with tab3:
@@ -391,7 +392,7 @@ with tab3:
                   hover_data=["지사", "점검건수", "최다위험", "최다비중", "다룬위험종류"], height=420)
     figb.update_layout(yaxis={"categoryorder": "total descending"},
                        coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0))
-    ev = st.plotly_chart(figb, use_container_width=True, on_select="rerun", key="bias_chart")
+    ev = st.plotly_chart(figb, width="stretch", on_select="rerun", key="bias_chart")
 
     picked = None
     try:
@@ -437,7 +438,7 @@ with tab3:
         figg = px.bar(gm, x="위험분류", y="비중", color="구분", barmode="group", height=380,
                       color_discrete_map={"점검비중": SEBANG_GREEN, "사고비중": "#e45756"})
         figg.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend_title="", yaxis_title="비중(%)")
-        st.plotly_chart(figg, use_container_width=True)
+        st.plotly_chart(figg, width="stretch")
         over = gb[gb["갭(사고-점검)"] > 5]
         if not over.empty:
             st.warning("⚠️ **" + gsel + "**에서 사고 대비 점검이 부족한 위험분류: "
@@ -611,8 +612,11 @@ with tab4:
                     st.info("금일 작업중지 보고 없음")
                 else:
                     for row in stoppages.itertuples():
+                        # 중지상세는 구글폼 자유서술 입력이라, 마크다운 문법(링크 등)이 그대로
+                        # 해석되지 않도록 본문(st.error)과 분리해 일반 텍스트로만 표시한다.
                         detail = row.중지상세 or "(상세 미기재)"
-                        st.error(f"**{row.branch}** 작업중지 {int(row.작업중지)}건\n\n{detail}")
+                        st.error(f"**{row.branch}** 작업중지 {int(row.작업중지)}건")
+                        st.text(detail)
 
             st.markdown("---")
             st.subheader("🚨 지사별 온열질환·조치 현황")
@@ -638,7 +642,7 @@ with tab4:
 
                 st.dataframe(
                     display_df.style.apply(_highlight_issue, axis=1),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                     column_config={"중지상세": st.column_config.TextColumn(width="large")},
                 )
                 st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
@@ -649,13 +653,16 @@ with tab4:
             if not photos.empty:
                 st.markdown("---")
                 st.subheader("📸 현장 활동 사진")
+                # p.branch/p.photo_url은 구글시트 응답(외부 입력)이라 raw HTML(components.html)에
+                # 꽂기 전에 반드시 이스케이프한다 — 폼이 드롭다운이라 지금은 안전해 보여도,
+                # 시트를 직접 수정하거나 필드가 자유서술로 바뀌면 스크립트 삽입 경로가 된다.
                 cards = "".join(
                     f'<div style="flex:0 0 auto; width:220px; scroll-snap-align:start;">'
-                    f'<img src="{p.photo_url}" style="width:220px; height:220px; object-fit:cover; '
+                    f'<img src="{html.escape(p.photo_url)}" style="width:220px; height:220px; object-fit:cover; '
                     f'border-radius:8px; display:block;" />'
                     f'<div style="font-size:12px; color:#333; background:rgba(255,255,255,.9); '
                     f'padding:4px 6px; border-radius:0 0 8px 8px;">'
-                    f'{p.branch} · {p.timestamp.strftime("%m-%d %H:%M")}</div>'
+                    f'{html.escape(str(p.branch))} · {p.timestamp.strftime("%m-%d %H:%M")}</div>'
                     f'</div>'
                     for p in photos.itertuples()
                 )
@@ -743,7 +750,7 @@ with tab4:
                 lambda a: a.update(text=f"{a.text} ({week_dates.get(a.text, '')}~)") if a.text in week_dates else a)
             fig_temp.update_xaxes(title="")
             fig_temp.update_yaxes(range=[25, 40])
-            st.plotly_chart(fig_temp, use_container_width=True)
+            st.plotly_chart(fig_temp, width="stretch")
             st.caption("왼쪽 = 지난주, 오른쪽 = 이번주(진행 중). 각 지사·주차의 최고 체감온도만 표시합니다.")
 
             st.markdown("---")
@@ -756,11 +763,11 @@ with tab4:
                                 color_discrete_map=HW.LEVEL_COLOR)
             fig_alert.update_layout(margin=dict(l=0, r=0, t=40, b=0), yaxis_title="발령 건수", legend_title="단계")
             fig_alert.update_xaxes(title="")
-            st.plotly_chart(fig_alert, use_container_width=True)
+            st.plotly_chart(fig_alert, width="stretch")
             st.caption("왼쪽 = 지난주, 오른쪽 = 이번주(진행 중 — 아직 발령이 없으면 빈 패널로 표시됩니다).")
 
             if not notif.empty:
                 with st.expander("📋 최근 발령 이력 전체"):
                     st.dataframe(
                         notif.sort_values("sent_at", ascending=False)[["branch", "site", "level", "apparent_temp", "sent_at", "status"]],
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)

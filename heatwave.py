@@ -10,21 +10,18 @@ sync_heatwave_data.py를 실행해 원본을 이 폴더로 복사한 뒤 git com
 """
 from __future__ import annotations
 
-import base64
 import math
 import re
 import sqlite3
 from pathlib import Path
 
 import pandas as pd
-import requests
 import streamlit as st
 import yaml
 
 HEATWAVE_DATA_DIR = Path(__file__).parent / "heatwave_data"
 ALERTS_DB_PATH = HEATWAVE_DATA_DIR / "alerts.db"
 SITES_YAML_PATH = HEATWAVE_DATA_DIR / "sites.yaml"
-KOREA_SVG_PATH = HEATWAVE_DATA_DIR / "Map_of_South_Korea-blank.svg"
 
 # 온열질환·조치 현황 구글폼 응답 시트를 "파일 > 웹에 게시 > CSV"로 발행한 링크.
 GOOGLE_SHEET_CSV_URL = (
@@ -41,12 +38,6 @@ PHOTO_SHEET_CSV_URL = (
 LEVEL_ORDER = ["주의", "경고", "위험"]
 LEVEL_COLOR = {"주의": "#f4d35e", "경고": "#f2a154", "위험": "#c81d25"}
 NORMAL_COLOR = "#6fb56f"
-
-# 위경도 -> Map_of_South_Korea-blank.svg 좌표계(viewBox 0 0 800 1200) 변환식.
-# 11개 시/도 중심점(실제 위경도 vs SVG 도형 bbox 중심)으로 최소자승 적합.
-SVG_VIEWBOX = (800, 1200)
-_X_COEF = (169.306327, -2.35651831, -21154.8859)   # a*lon + b*lat + c
-_Y_COEF = (2.88404005, -218.071214, 8062.87449)     # d*lon + e*lat + f
 
 
 def available() -> bool:
@@ -109,20 +100,6 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dl = math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
-
-
-def latlon_to_svg_pct(lat: float, lon: float) -> tuple[float, float]:
-    """위경도 -> Map_of_South_Korea-blank.svg 상의 (left%, top%)."""
-    x = _X_COEF[0] * lon + _X_COEF[1] * lat + _X_COEF[2]
-    y = _Y_COEF[0] * lon + _Y_COEF[1] * lat + _Y_COEF[2]
-    return x / SVG_VIEWBOX[0] * 100, y / SVG_VIEWBOX[1] * 100
-
-
-def korea_svg_data_uri() -> str | None:
-    if not KOREA_SVG_PATH.exists():
-        return None
-    raw = KOREA_SVG_PATH.read_bytes()
-    return "data:image/svg+xml;base64," + base64.b64encode(raw).decode("ascii")
 
 
 def _is_blank_level(level) -> bool:

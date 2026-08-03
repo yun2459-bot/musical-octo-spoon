@@ -397,6 +397,16 @@ _KO_TS_PAT = re.compile(
 )
 
 
+def _to_count(series: pd.Series) -> pd.Series:
+    """건수/인원 문항을 정수로 변환 — "0명", "2건", "없음" 같은 자유 입력도 견딘다.
+
+    구글폼 단답형은 숫자만 받도록 강제할 수 없어 현장에서 단위를 붙여 적는 일이 잦다.
+    문자열에서 첫 숫자만 뽑아 쓰고(예: "3명"→3), 숫자가 없으면 0으로 본다.
+    """
+    nums = series.astype(str).str.extract(r"(-?\d+)", expand=False)
+    return pd.to_numeric(nums, errors="coerce").fillna(0).astype(int)
+
+
 def _parse_google_timestamp(raw) -> pd.Timestamp:
     """구글폼 응답 시트의 기본 타임스탬프 형식("2026. 7. 31 오후 4:10:16")을 파싱한다.
 
@@ -496,6 +506,11 @@ def load_incident_reports_raw() -> pd.DataFrame | None:
     text_cols = ["중지상세", "물", "바람그늘", "휴식", "비상물품교육", "민감군", "점검특이사항"]
     for c in text_cols:
         df[c] = df[c].fillna("")
+    # 숫자 문항이지만 구글폼 단답형이라 "0명", "0건", "없음" 처럼 자유롭게 적히는 경우가
+    # 실제로 있다 — 그대로 두면 컬럼이 문자열이 되어 .sum()이 값을 이어붙이고("0"+"0명"),
+    # int() 변환에서 앱이 죽는다. 숫자만 뽑아 쓰고, 못 뽑으면 0으로 본다.
+    for c in ["환자수", "작업조정", "작업중지"]:
+        df[c] = _to_count(df[c])
     return df.sort_values("timestamp")[
         ["branch", "환자수", "작업조정", "작업중지", "중지상세",
          "물", "바람그늘", "휴식", "비상물품교육", "민감군", "점검특이사항", "timestamp"]]

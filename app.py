@@ -261,6 +261,39 @@ def _check_password() -> bool:
 if not _check_password():
     st.stop()
 
+
+def _analysis_unlocked() -> bool:
+    """분석 탭(전사 현황/지사 상세/점검 편향분석) 전용 2차 비밀번호 확인.
+
+    폭염 대응 탭은 지사 전체가 매주 쓰는 운영 화면이라 APP_PASSWORD만으로 열리지만,
+    분석 탭 3개는 연구용 원자료(점검·재해 이력 전수)라 별도 비밀번호를 하나 더 둔다.
+    ANALYSIS_PASSWORD가 secrets에 없으면 잠그지 않는다(로컬 개발 편의).
+    """
+    try:
+        required = st.secrets.get("ANALYSIS_PASSWORD", "")
+    except Exception:
+        required = ""
+    return (not required) or bool(st.session_state.get("_analysis_authed"))
+
+
+def _analysis_gate(tab_key: str) -> bool:
+    """잠긴 분석 탭 안에 비밀번호 입력창을 그리고, 통과했으면 True.
+
+    탭마다 위젯 key가 달라야 해서 tab_key를 받는다(같은 key를 쓰면 Streamlit이
+    중복 위젯으로 보고 에러를 낸다).
+    """
+    if _analysis_unlocked():
+        return True
+    st.info("🔒 이 탭은 연구용 원자료를 포함하고 있어 별도 비밀번호가 필요합니다.")
+    pw = st.text_input("분석 탭 비밀번호", type="password", key=f"_analysis_pw_{tab_key}")
+    if pw:
+        if pw == st.secrets.get("ANALYSIS_PASSWORD", ""):
+            st.session_state["_analysis_authed"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 올바르지 않습니다.")
+    return False
+
 # 차트(matplotlib)도 세방고딕을 우선 쓰고, 파일이 없는 예외 상황에서만 번들 폰트/윈도우 폰트로 폴백.
 _FONT_CANDIDATES = [
     _SEBANG_REGULAR,
@@ -376,261 +409,6 @@ _mode = "🧪 LLM 하이브리드(파일럿)" if SEV_COL == "LLM심각도" else 
 st.caption(f"심각도 기준: **{_mode}** · 분석기간: {period_opt}")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석", "🌡️ 폭염 대응"])
-
-# ================================================================== TAB1 전사 현황
-with tab1:
-    st.success(
-        "🧭 **이 지수를 어떻게 볼까요?** — 위험지수는 지사를 평가·처벌하는 점수가 **아닙니다.** "
-        "점검을 활발하고 꼼꼼하게 한 지사일수록 위험을 많이 발굴해 지수가 높게 나올 수 있으며, "
-        "이는 **안전관리 활동이 적정하게 이뤄지고 있다는 긍정적 신호**로 해석합니다. "
-        "본사는 이 값을 자원 배분(교육·예산·인력)의 우선순위 참고자료로만 사용합니다.",
-        icon="🧭")
-
-    if SEV_COL == "LLM심각도":
-        st.info(
-            "🧪 **LLM 하이브리드 모드** — 지적내용의 문맥(작업 위치·상황)까지 반영한 파일럿 결과입니다. "
-            "규칙기반 대비 당진지사가 상위로, 부산지사가 하위로 순위가 조정됩니다.", icon="🧪")
-
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        NORM = {"총량": "위험지수", "사업장당": "사업장당지수", "안전관리자당": "관리자당지수"}
-        basis_label = st.radio("보정 기준", list(NORM.keys()), horizontal=True,
-                               help="지사마다 사업장·안전관리자 수가 달라, 규모로 나눈 값도 함께 볼 수 있습니다.")
-        basis = NORM[basis_label]
-        ri_sorted = ri.sort_values(basis, ascending=True)
-        fig = px.bar(ri_sorted, x=basis, y="지사", orientation="h",
-                     text=basis, height=430,
-                     hover_data=["지적건수", "평균심각도", "안전관리자수", "사업장수"])
-        fig.update_traces(marker_color=CHART_ACCENT, textposition="outside", cliponaxis=False)
-        fig.update_layout(margin=dict(l=0, r=30, t=30, b=0),
-                          xaxis_title="", yaxis_title="",
-                          title=f"지사별 위험·점검활동 지수 ({basis_label})")
-        st.plotly_chart(fig, width="stretch")
-        st.caption("높다고 위험한 지사가 아니라, 위험을 많이 발굴했거나 규모가 큰 지사일 수 있습니다. "
-                   "오른쪽 '양 vs 질'로 나눠서 보세요.")
-    with c2:
-        st.markdown("**점검의 '양'(건수) vs '질'(평균 심각도)**")
-        fig = px.scatter(ri, x="지적건수", y="평균심각도", size="가중점수",
-                         color="평균심각도", color_continuous_scale="Blues",
-                         text="지사", height=430, size_max=45)
-        fig.update_traces(textposition="top center")
-        fig.add_vline(x=ri["지적건수"].median(), line_dash="dot", line_color="gray")
-        fig.add_hline(y=ri["평균심각도"].median(), line_dash="dot", line_color="gray")
-        fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
-                          xaxis_title="점검 건수(활동량)", yaxis_title="평균 심각도(위험 정도)")
-        st.plotly_chart(fig, width="stretch")
-        st.caption("오른쪽 = 점검 활발(바람직) · 위쪽 = 심각한 지적 비중 높음. "
-                   "'점검을 많이 한 것'과 '위험이 심각한 것'은 다릅니다.")
-
-    with st.expander("📋 지사별 상세 표 (건수·규모·지수)"):
-        st.dataframe(
-            ri[["지사", "지적건수", "평균심각도", "안전관리자수", "사업장수",
-                "위험지수", "사업장당지수", "관리자당지수"]],
-            width="stretch", hide_index=True)
-
-# ================================================================== TAB2 지사 상세
-# 워드클라우드 불용어 — 문법 조각 · 점검 '과정' 메타어 · 지명
-_STOP = ("있 없 및 등 위 시 후 전 중 내 외 관련 대한 하여 위해 인한 인해 따른 통해 실시 확인 조치 필요 요함 요망 "
-         "발생 상태 작업 현장 근로자 사용 부분 경우 이동 진행 완료 요청 가능 대해 으로 에서 하는 되는 방지 미흡 "
-         "이나 또는 지사 내용 사항 여부 당사 소속 운전 원인 결과 예정 이상 우측 좌측 일부 해당 예방 조치요망 "
-         "위험 안전 관리 오늘 하기 되어 있는 없는 통한 대비 이후 이전 위한 우려 존재 가능성 있음 없음 등의 등을 "
-         "등이 대하여 관하여 인하여 위하여 하도록 하며 하고 이고 이며 되며 따라 아래 다음 지적 코칭 개선 점검 "
-         "확인함 실시함 조치함 요청함 점검일 일지 관리자 담당 지금 현문 세트 서류 인원 주변 사무동 게시 위치 "
-         "당시 부착 재해 저하 상시 수시 조치예정 조치완료 미실시 "
-         "강원 경남 경북 경인 광양 당진 목포 부산 삼천포 전북 울산 본사 인천 경기 포항 군산 동해 창원")
-STOPWORDS = set(_STOP.split())
-
-
-def tokenize(texts):
-    cnt = {}
-    for t in texts:
-        for w in re.findall(r"[가-힣]{2,}", str(t)):
-            if w in STOPWORDS or w.endswith("지사"):
-                continue
-            cnt[w] = cnt.get(w, 0) + 1
-    return cnt
-
-
-def growth_wordcloud(df_branch, col, max_words=30):
-    """급증 위험요인=빨강. 최근 60일 vs 이전 60일 빈도 증가율로 색상. 단어 수 제한으로 식별성 확보."""
-    end_ = df_branch["점검일자"].max()
-    recent = df_branch[df_branch["점검일자"] >= end_ - pd.Timedelta(days=60)]
-    prior = df_branch[(df_branch["점검일자"] < end_ - pd.Timedelta(days=60)) &
-                      (df_branch["점검일자"] >= end_ - pd.Timedelta(days=120))]
-    fr, fp, total = tokenize(recent[col]), tokenize(prior[col]), tokenize(df_branch[col])
-    if not total:
-        return None
-    growth = {w: (fr.get(w, 0) - fp.get(w, 0)) / (fp.get(w, 0) + 1) for w in total}
-
-    def color_func(word, **kw):
-        g = growth.get(word, 0)
-        if g >= 1.0:   return "#d62728"
-        if g > 0:      return "#e8862c"
-        return "#7f8fa6"
-
-    wc = WordCloud(font_path=FONT_PATH, background_color="white",
-                   width=720, height=420, max_words=max_words, color_func=color_func,
-                   prefer_horizontal=0.95, margin=6).generate_from_frequencies(total)
-    fig, ax = plt.subplots(figsize=(8, 4.6))
-    ax.imshow(wc, interpolation="bilinear"); ax.axis("off")
-    fig.tight_layout(pad=0)
-    return fig
-
-
-with tab2:
-    sel = st.selectbox("지사 선택", ri["지사"].tolist())
-    dfb = insp[insp["지사"] == sel]
-    rrow = ri[ri["지사"] == sel].iloc[0]
-
-    cA, cB = st.columns([1, 2])
-    with cA:
-        val = float(rrow["위험지수"])
-        gfig = go.Figure(go.Indicator(
-            mode="gauge+number", value=val, title={"text": f"{sel} 위험·활동 지수"},
-            gauge={"axis": {"range": [0, 100]},
-                   "bar": {"color": CHART_ACCENT},
-                   "steps": [{"range": [0, 50], "color": "#F2F3F3"},
-                             {"range": [50, 80], "color": SEBANG_LIGHT_GRAY_1},
-                             {"range": [80, 100], "color": SEBANG_LIGHT_GRAY_2}]}))
-        gfig.update_layout(height=260, margin=dict(l=10, r=10, t=50, b=10))
-        st.plotly_chart(gfig, width="stretch")
-        st.caption(f"점검 {int(rrow['지적건수'])}건 · 평균 심각도 {rrow['평균심각도']:.2f} · "
-                   f"사업장 {int(rrow['사업장수'])}곳 · 안전관리자 {int(rrow['안전관리자수'])}명")
-        st.markdown("**위험분류별 지적 분포**")
-        vc = dfb[dfb["위험분류"].isin(S.PHYSICAL_HAZARDS)]["위험분류"].value_counts()
-        st.bar_chart(vc, height=240, color=CHART_ACCENT)
-    with cB:
-        st.markdown("**동적 워드클라우드** — 🔴급증 · 🟠증가 · ⚪안정 (최근 60일 대비) · 상위 30개 단어")
-        w1, w2 = st.columns(2)
-        with w1:
-            st.markdown("🔎 **점검(코칭)내용** — 무엇을 지적했나")
-            fig = growth_wordcloud(dfb, "지적내용_평문")
-            if fig is not None:
-                st.pyplot(fig)
-            else:
-                st.info("텍스트 부족")
-        with w2:
-            st.markdown("🛠️ **조치내용** — 어떻게 개선했나")
-            fig = growth_wordcloud(dfb, "조치내용_평문")
-            if fig is not None:
-                st.pyplot(fig)
-            else:
-                st.info("텍스트 부족")
-
-    st.markdown("---")
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        st.subheader("🎯 점검 사각지대")
-        st.caption("과거 인적재해가 있었으나 최근 점검에서 다루지 않은 위험분류 (질병성 제외)")
-        bs = S.blind_spots(insp, acc, exclude_disease=True)
-        bsb = bs[bs["지사"] == sel] if not bs.empty else bs
-        if bsb is None or bsb.empty:
-            st.success("최근 점검에서 놓친 과거재해 위험분류가 없습니다.")
-        else:
-            st.dataframe(bsb[["위험분류", "과거재해", "최근점검", "상태"]],
-                         width="stretch", hide_index=True, height=220)
-    with cc2:
-        st.subheader("📜 과거 인적재해 이력")
-        pa = acc[(acc["지사"] == sel) & (acc["재해성격"] == "인적재해")]
-        if pa.empty:
-            st.info("인적재해 이력 없음")
-        else:
-            st.caption(f"총 {len(pa)}건 (산재 {int((pa['산재구분']=='산재').sum())} · "
-                       f"공상 {int((pa['산재구분']=='공상').sum())})")
-            hist = pa.groupby("위험분류").size().sort_values(ascending=False).reset_index(name="건수")
-            st.dataframe(hist, width="stretch", hide_index=True, height=220)
-
-    # ---- 분류 재검토 제안 (AI 텍스트 분석) ----
-    st.markdown("---")
-    st.subheader("🔧 위험분류 재검토 제안 (AI 텍스트 분석)")
-    st.caption("LLM이 지적내용을 읽고, 규칙기반으로 붙은 위험분류가 실제 내용과 맞지 않아 보이는 사례를 찾은 결과입니다. "
-               "같은 유형(예: 안전모 미착용)이 지사마다 다르게 분류되는 문제를 발견할 수 있습니다.")
-    mis_all = insp[insp["위험분류_재검토"].notna()].copy()
-    if not mis_all.empty:
-        mis_all["지적내용"] = mis_all["지적내용_평문"].astype(str).str.replace(r"\([^)]*\)", "", regex=True)
-    mis_b = mis_all[mis_all["지사"] == sel] if not mis_all.empty else mis_all
-    if mis_b is None or mis_b.empty:
-        st.info(f"{sel}은 현재 재검토 후보가 없습니다. (아래 전사 목록에서 다른 지사 사례를 볼 수 있습니다)")
-    else:
-        st.write(f"**{sel}** 재검토 후보 {len(mis_b)}건")
-        st.dataframe(
-            mis_b[["위험분류", "위험분류_재검토", "지적내용"]].rename(
-                columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
-            width="stretch", hide_index=True)
-    if not mis_all.empty:
-        with st.expander(f"🔎 전사 재검토 후보 전체 {len(mis_all)}건 — 지사 간 분류 일관성 점검"):
-            st.dataframe(
-                mis_all[["지사", "위험분류", "위험분류_재검토", "지적내용"]].rename(
-                    columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
-                width="stretch", hide_index=True)
-
-# ================================================================== TAB3 점검 편향분석
-with tab3:
-    st.info(
-        "이 지사(안전관리자)의 점검이 **특정 위험에만 쏠려 있지 않은지**, 그리고 **실제 사고가 나는 유형을 "
-        "잘 점검하고 있는지**를 자체 점검하는 화면입니다. 잘잘못을 가리는 것이 아니라 사각지대를 스스로 "
-        "발견하기 위한 참고 지표입니다.", icon="🔍")
-    st.caption("※ 근골격 등 질병성(지연발현) 재해는 현장 실시간 점검으로 포착이 어려워 편향분석에서 제외합니다.")
-
-    st.subheader("점검자별 위험분류 다양성 지수")
-    st.caption("지수가 낮을수록 특정 위험분류에 편중된 점검입니다. 막대를 클릭하거나 아래에서 점검자를 선택하면 상세가 열립니다.")
-    bias = S.inspector_bias(insp)
-    figb = px.bar(bias, x="다양성지수", y="점검자", orientation="h", color="다양성지수",
-                  color_continuous_scale="RdYlGn", range_color=[0.6, 1.0],
-                  hover_data=["지사", "점검건수", "최다위험", "최다비중", "다룬위험종류"], height=420)
-    figb.update_layout(yaxis={"categoryorder": "total descending"},
-                       coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0))
-    ev = st.plotly_chart(figb, width="stretch", on_select="rerun", key="bias_chart")
-
-    picked = None
-    try:
-        pts = ev.selection.points if ev and ev.selection else []
-        if pts:
-            picked = pts[0].get("y")
-    except Exception:
-        picked = None
-    names = bias["점검자"].tolist()
-    idx = names.index(picked) if picked in names else 0
-    who = st.selectbox("점검자 상세 보기", names, index=idx, key="bias_pick")
-
-    det = S.inspector_detail(insp, who)
-    brow = bias[bias["점검자"] == who].iloc[0]
-    st.markdown(f"#### 👷 {who} · {det['지사']} · 점검 {det['점검건수']}건 · "
-                f"다양성지수 {brow['다양성지수']} (최다: {brow['최다위험']} {brow['최다비중']:.0f}%)")
-    dc1, dc2 = st.columns(2)
-    with dc1:
-        st.markdown("**어떤 위험을 점검했나** (위험분류 분포)")
-        st.bar_chart(det["위험분류분포"], color=CHART_ACCENT, height=240)
-    with dc2:
-        st.markdown("**어느 사업장에서 점검했나** (사업장 분포)")
-        st.bar_chart(det["사업장분포"], color=CHART_ACCENT, height=240)
-    if det["소외위험"]:
-        st.warning(f"🔎 **{who}**님이 최근 한 번도 다루지 않은 물리위험: **{', '.join(det['소외위험'])}** "
-                   "→ 다음 점검 시 의식적으로 확인 권장")
-    else:
-        st.success(f"{who}님은 주요 물리위험을 고르게 점검하고 있습니다.")
-
-    st.markdown("---")
-    st.subheader("지사별 갭분석 — 점검 vs 실제 사고")
-    st.caption("선택한 지사의 위험분류별 [점검 비중] vs [사고 비중]. 사고비중이 점검비중보다 크면 "
-               "그 지사의 점검이 실제 위험을 놓치고 있을 수 있습니다. (질병성 제외)")
-    gsel = st.selectbox("지사 선택", INSP_BRANCHES,
-                        index=INSP_BRANCHES.index(sel) if sel in INSP_BRANCHES else 0, key="gap_branch")
-    gb = S.coverage_gap_by_branch(insp, acc, gsel, exclude_disease=True)
-    if gb.empty or gb[["점검비중", "사고비중"]].to_numpy().sum() == 0:
-        st.info(f"{gsel}: 비교할 사고 이력 또는 점검 데이터가 부족합니다.")
-    else:
-        gm = gb.reset_index().rename(columns={"index": "위험분류"}).melt(
-            id_vars="위험분류", value_vars=["점검비중", "사고비중"],
-            var_name="구분", value_name="비중")
-        figg = px.bar(gm, x="위험분류", y="비중", color="구분", barmode="group", height=380,
-                      color_discrete_map={"점검비중": SEBANG_GREEN, "사고비중": "#e45756"})
-        figg.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend_title="", yaxis_title="비중(%)")
-        st.plotly_chart(figg, width="stretch")
-        over = gb[gb["갭(사고-점검)"] > 5]
-        if not over.empty:
-            st.warning("⚠️ **" + gsel + "**에서 사고 대비 점검이 부족한 위험분류: "
-                       + ", ".join(f"**{h}**(+{gb.loc[h,'갭(사고-점검)']:.0f}%p)" for h in over.index))
 
 # ================================================================== TAB4 폭염 대응
 with tab4:
@@ -1089,3 +867,274 @@ with tab4:
                     st.dataframe(
                         notif.sort_values("sent_at", ascending=False)[["branch", "site", "level", "apparent_temp", "sent_at", "status"]],
                         width="stretch", hide_index=True)
+
+# ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트
+# 폭염 대응(tab4) 블록을 분석 탭보다 먼저 그린다 — 잠겨 있을 때 st.stop()으로 이후
+# 실행을 멈춰도 운영 화면인 폭염 탭은 이미 렌더링돼 정상 동작하게 하기 위함이다.
+# (탭이 화면에 보이는 순서는 st.tabs() 선언 순서라, 코드 순서를 바꿔도 UI는 그대로다.)
+if not _analysis_unlocked():
+    with tab1:
+        _analysis_gate("tab1")
+    with tab2:
+        _analysis_gate("tab2")
+    with tab3:
+        _analysis_gate("tab3")
+    st.stop()
+
+
+# ================================================================== TAB1 전사 현황
+with tab1:
+    st.success(
+        "🧭 **이 지수를 어떻게 볼까요?** — 위험지수는 지사를 평가·처벌하는 점수가 **아닙니다.** "
+        "점검을 활발하고 꼼꼼하게 한 지사일수록 위험을 많이 발굴해 지수가 높게 나올 수 있으며, "
+        "이는 **안전관리 활동이 적정하게 이뤄지고 있다는 긍정적 신호**로 해석합니다. "
+        "본사는 이 값을 자원 배분(교육·예산·인력)의 우선순위 참고자료로만 사용합니다.",
+        icon="🧭")
+
+    if SEV_COL == "LLM심각도":
+        st.info(
+            "🧪 **LLM 하이브리드 모드** — 지적내용의 문맥(작업 위치·상황)까지 반영한 파일럿 결과입니다. "
+            "규칙기반 대비 당진지사가 상위로, 부산지사가 하위로 순위가 조정됩니다.", icon="🧪")
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        NORM = {"총량": "위험지수", "사업장당": "사업장당지수", "안전관리자당": "관리자당지수"}
+        basis_label = st.radio("보정 기준", list(NORM.keys()), horizontal=True,
+                               help="지사마다 사업장·안전관리자 수가 달라, 규모로 나눈 값도 함께 볼 수 있습니다.")
+        basis = NORM[basis_label]
+        ri_sorted = ri.sort_values(basis, ascending=True)
+        fig = px.bar(ri_sorted, x=basis, y="지사", orientation="h",
+                     text=basis, height=430,
+                     hover_data=["지적건수", "평균심각도", "안전관리자수", "사업장수"])
+        fig.update_traces(marker_color=CHART_ACCENT, textposition="outside", cliponaxis=False)
+        fig.update_layout(margin=dict(l=0, r=30, t=30, b=0),
+                          xaxis_title="", yaxis_title="",
+                          title=f"지사별 위험·점검활동 지수 ({basis_label})")
+        st.plotly_chart(fig, width="stretch")
+        st.caption("높다고 위험한 지사가 아니라, 위험을 많이 발굴했거나 규모가 큰 지사일 수 있습니다. "
+                   "오른쪽 '양 vs 질'로 나눠서 보세요.")
+    with c2:
+        st.markdown("**점검의 '양'(건수) vs '질'(평균 심각도)**")
+        fig = px.scatter(ri, x="지적건수", y="평균심각도", size="가중점수",
+                         color="평균심각도", color_continuous_scale="Blues",
+                         text="지사", height=430, size_max=45)
+        fig.update_traces(textposition="top center")
+        fig.add_vline(x=ri["지적건수"].median(), line_dash="dot", line_color="gray")
+        fig.add_hline(y=ri["평균심각도"].median(), line_dash="dot", line_color="gray")
+        fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
+                          xaxis_title="점검 건수(활동량)", yaxis_title="평균 심각도(위험 정도)")
+        st.plotly_chart(fig, width="stretch")
+        st.caption("오른쪽 = 점검 활발(바람직) · 위쪽 = 심각한 지적 비중 높음. "
+                   "'점검을 많이 한 것'과 '위험이 심각한 것'은 다릅니다.")
+
+    with st.expander("📋 지사별 상세 표 (건수·규모·지수)"):
+        st.dataframe(
+            ri[["지사", "지적건수", "평균심각도", "안전관리자수", "사업장수",
+                "위험지수", "사업장당지수", "관리자당지수"]],
+            width="stretch", hide_index=True)
+
+# ================================================================== TAB2 지사 상세
+# 워드클라우드 불용어 — 문법 조각 · 점검 '과정' 메타어 · 지명
+_STOP = ("있 없 및 등 위 시 후 전 중 내 외 관련 대한 하여 위해 인한 인해 따른 통해 실시 확인 조치 필요 요함 요망 "
+         "발생 상태 작업 현장 근로자 사용 부분 경우 이동 진행 완료 요청 가능 대해 으로 에서 하는 되는 방지 미흡 "
+         "이나 또는 지사 내용 사항 여부 당사 소속 운전 원인 결과 예정 이상 우측 좌측 일부 해당 예방 조치요망 "
+         "위험 안전 관리 오늘 하기 되어 있는 없는 통한 대비 이후 이전 위한 우려 존재 가능성 있음 없음 등의 등을 "
+         "등이 대하여 관하여 인하여 위하여 하도록 하며 하고 이고 이며 되며 따라 아래 다음 지적 코칭 개선 점검 "
+         "확인함 실시함 조치함 요청함 점검일 일지 관리자 담당 지금 현문 세트 서류 인원 주변 사무동 게시 위치 "
+         "당시 부착 재해 저하 상시 수시 조치예정 조치완료 미실시 "
+         "강원 경남 경북 경인 광양 당진 목포 부산 삼천포 전북 울산 본사 인천 경기 포항 군산 동해 창원")
+STOPWORDS = set(_STOP.split())
+
+
+def tokenize(texts):
+    cnt = {}
+    for t in texts:
+        for w in re.findall(r"[가-힣]{2,}", str(t)):
+            if w in STOPWORDS or w.endswith("지사"):
+                continue
+            cnt[w] = cnt.get(w, 0) + 1
+    return cnt
+
+
+def growth_wordcloud(df_branch, col, max_words=30):
+    """급증 위험요인=빨강. 최근 60일 vs 이전 60일 빈도 증가율로 색상. 단어 수 제한으로 식별성 확보."""
+    end_ = df_branch["점검일자"].max()
+    recent = df_branch[df_branch["점검일자"] >= end_ - pd.Timedelta(days=60)]
+    prior = df_branch[(df_branch["점검일자"] < end_ - pd.Timedelta(days=60)) &
+                      (df_branch["점검일자"] >= end_ - pd.Timedelta(days=120))]
+    fr, fp, total = tokenize(recent[col]), tokenize(prior[col]), tokenize(df_branch[col])
+    if not total:
+        return None
+    growth = {w: (fr.get(w, 0) - fp.get(w, 0)) / (fp.get(w, 0) + 1) for w in total}
+
+    def color_func(word, **kw):
+        g = growth.get(word, 0)
+        if g >= 1.0:   return "#d62728"
+        if g > 0:      return "#e8862c"
+        return "#7f8fa6"
+
+    wc = WordCloud(font_path=FONT_PATH, background_color="white",
+                   width=720, height=420, max_words=max_words, color_func=color_func,
+                   prefer_horizontal=0.95, margin=6).generate_from_frequencies(total)
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    ax.imshow(wc, interpolation="bilinear"); ax.axis("off")
+    fig.tight_layout(pad=0)
+    return fig
+
+
+with tab2:
+    sel = st.selectbox("지사 선택", ri["지사"].tolist())
+    dfb = insp[insp["지사"] == sel]
+    rrow = ri[ri["지사"] == sel].iloc[0]
+
+    cA, cB = st.columns([1, 2])
+    with cA:
+        val = float(rrow["위험지수"])
+        gfig = go.Figure(go.Indicator(
+            mode="gauge+number", value=val, title={"text": f"{sel} 위험·활동 지수"},
+            gauge={"axis": {"range": [0, 100]},
+                   "bar": {"color": CHART_ACCENT},
+                   "steps": [{"range": [0, 50], "color": "#F2F3F3"},
+                             {"range": [50, 80], "color": SEBANG_LIGHT_GRAY_1},
+                             {"range": [80, 100], "color": SEBANG_LIGHT_GRAY_2}]}))
+        gfig.update_layout(height=260, margin=dict(l=10, r=10, t=50, b=10))
+        st.plotly_chart(gfig, width="stretch")
+        st.caption(f"점검 {int(rrow['지적건수'])}건 · 평균 심각도 {rrow['평균심각도']:.2f} · "
+                   f"사업장 {int(rrow['사업장수'])}곳 · 안전관리자 {int(rrow['안전관리자수'])}명")
+        st.markdown("**위험분류별 지적 분포**")
+        vc = dfb[dfb["위험분류"].isin(S.PHYSICAL_HAZARDS)]["위험분류"].value_counts()
+        st.bar_chart(vc, height=240, color=CHART_ACCENT)
+    with cB:
+        st.markdown("**동적 워드클라우드** — 🔴급증 · 🟠증가 · ⚪안정 (최근 60일 대비) · 상위 30개 단어")
+        w1, w2 = st.columns(2)
+        with w1:
+            st.markdown("🔎 **점검(코칭)내용** — 무엇을 지적했나")
+            fig = growth_wordcloud(dfb, "지적내용_평문")
+            if fig is not None:
+                st.pyplot(fig)
+            else:
+                st.info("텍스트 부족")
+        with w2:
+            st.markdown("🛠️ **조치내용** — 어떻게 개선했나")
+            fig = growth_wordcloud(dfb, "조치내용_평문")
+            if fig is not None:
+                st.pyplot(fig)
+            else:
+                st.info("텍스트 부족")
+
+    st.markdown("---")
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.subheader("🎯 점검 사각지대")
+        st.caption("과거 인적재해가 있었으나 최근 점검에서 다루지 않은 위험분류 (질병성 제외)")
+        bs = S.blind_spots(insp, acc, exclude_disease=True)
+        bsb = bs[bs["지사"] == sel] if not bs.empty else bs
+        if bsb is None or bsb.empty:
+            st.success("최근 점검에서 놓친 과거재해 위험분류가 없습니다.")
+        else:
+            st.dataframe(bsb[["위험분류", "과거재해", "최근점검", "상태"]],
+                         width="stretch", hide_index=True, height=220)
+    with cc2:
+        st.subheader("📜 과거 인적재해 이력")
+        pa = acc[(acc["지사"] == sel) & (acc["재해성격"] == "인적재해")]
+        if pa.empty:
+            st.info("인적재해 이력 없음")
+        else:
+            st.caption(f"총 {len(pa)}건 (산재 {int((pa['산재구분']=='산재').sum())} · "
+                       f"공상 {int((pa['산재구분']=='공상').sum())})")
+            hist = pa.groupby("위험분류").size().sort_values(ascending=False).reset_index(name="건수")
+            st.dataframe(hist, width="stretch", hide_index=True, height=220)
+
+    # ---- 분류 재검토 제안 (AI 텍스트 분석) ----
+    st.markdown("---")
+    st.subheader("🔧 위험분류 재검토 제안 (AI 텍스트 분석)")
+    st.caption("LLM이 지적내용을 읽고, 규칙기반으로 붙은 위험분류가 실제 내용과 맞지 않아 보이는 사례를 찾은 결과입니다. "
+               "같은 유형(예: 안전모 미착용)이 지사마다 다르게 분류되는 문제를 발견할 수 있습니다.")
+    mis_all = insp[insp["위험분류_재검토"].notna()].copy()
+    if not mis_all.empty:
+        mis_all["지적내용"] = mis_all["지적내용_평문"].astype(str).str.replace(r"\([^)]*\)", "", regex=True)
+    mis_b = mis_all[mis_all["지사"] == sel] if not mis_all.empty else mis_all
+    if mis_b is None or mis_b.empty:
+        st.info(f"{sel}은 현재 재검토 후보가 없습니다. (아래 전사 목록에서 다른 지사 사례를 볼 수 있습니다)")
+    else:
+        st.write(f"**{sel}** 재검토 후보 {len(mis_b)}건")
+        st.dataframe(
+            mis_b[["위험분류", "위험분류_재검토", "지적내용"]].rename(
+                columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
+            width="stretch", hide_index=True)
+    if not mis_all.empty:
+        with st.expander(f"🔎 전사 재검토 후보 전체 {len(mis_all)}건 — 지사 간 분류 일관성 점검"):
+            st.dataframe(
+                mis_all[["지사", "위험분류", "위험분류_재검토", "지적내용"]].rename(
+                    columns={"위험분류": "원본 분류", "위험분류_재검토": "AI 재검토 제안"}),
+                width="stretch", hide_index=True)
+
+# ================================================================== TAB3 점검 편향분석
+with tab3:
+    st.info(
+        "이 지사(안전관리자)의 점검이 **특정 위험에만 쏠려 있지 않은지**, 그리고 **실제 사고가 나는 유형을 "
+        "잘 점검하고 있는지**를 자체 점검하는 화면입니다. 잘잘못을 가리는 것이 아니라 사각지대를 스스로 "
+        "발견하기 위한 참고 지표입니다.", icon="🔍")
+    st.caption("※ 근골격 등 질병성(지연발현) 재해는 현장 실시간 점검으로 포착이 어려워 편향분석에서 제외합니다.")
+
+    st.subheader("점검자별 위험분류 다양성 지수")
+    st.caption("지수가 낮을수록 특정 위험분류에 편중된 점검입니다. 막대를 클릭하거나 아래에서 점검자를 선택하면 상세가 열립니다.")
+    bias = S.inspector_bias(insp)
+    figb = px.bar(bias, x="다양성지수", y="점검자", orientation="h", color="다양성지수",
+                  color_continuous_scale="RdYlGn", range_color=[0.6, 1.0],
+                  hover_data=["지사", "점검건수", "최다위험", "최다비중", "다룬위험종류"], height=420)
+    figb.update_layout(yaxis={"categoryorder": "total descending"},
+                       coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0))
+    ev = st.plotly_chart(figb, width="stretch", on_select="rerun", key="bias_chart")
+
+    picked = None
+    try:
+        pts = ev.selection.points if ev and ev.selection else []
+        if pts:
+            picked = pts[0].get("y")
+    except Exception:
+        picked = None
+    names = bias["점검자"].tolist()
+    idx = names.index(picked) if picked in names else 0
+    who = st.selectbox("점검자 상세 보기", names, index=idx, key="bias_pick")
+
+    det = S.inspector_detail(insp, who)
+    brow = bias[bias["점검자"] == who].iloc[0]
+    st.markdown(f"#### 👷 {who} · {det['지사']} · 점검 {det['점검건수']}건 · "
+                f"다양성지수 {brow['다양성지수']} (최다: {brow['최다위험']} {brow['최다비중']:.0f}%)")
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        st.markdown("**어떤 위험을 점검했나** (위험분류 분포)")
+        st.bar_chart(det["위험분류분포"], color=CHART_ACCENT, height=240)
+    with dc2:
+        st.markdown("**어느 사업장에서 점검했나** (사업장 분포)")
+        st.bar_chart(det["사업장분포"], color=CHART_ACCENT, height=240)
+    if det["소외위험"]:
+        st.warning(f"🔎 **{who}**님이 최근 한 번도 다루지 않은 물리위험: **{', '.join(det['소외위험'])}** "
+                   "→ 다음 점검 시 의식적으로 확인 권장")
+    else:
+        st.success(f"{who}님은 주요 물리위험을 고르게 점검하고 있습니다.")
+
+    st.markdown("---")
+    st.subheader("지사별 갭분석 — 점검 vs 실제 사고")
+    st.caption("선택한 지사의 위험분류별 [점검 비중] vs [사고 비중]. 사고비중이 점검비중보다 크면 "
+               "그 지사의 점검이 실제 위험을 놓치고 있을 수 있습니다. (질병성 제외)")
+    gsel = st.selectbox("지사 선택", INSP_BRANCHES,
+                        index=INSP_BRANCHES.index(sel) if sel in INSP_BRANCHES else 0, key="gap_branch")
+    gb = S.coverage_gap_by_branch(insp, acc, gsel, exclude_disease=True)
+    if gb.empty or gb[["점검비중", "사고비중"]].to_numpy().sum() == 0:
+        st.info(f"{gsel}: 비교할 사고 이력 또는 점검 데이터가 부족합니다.")
+    else:
+        gm = gb.reset_index().rename(columns={"index": "위험분류"}).melt(
+            id_vars="위험분류", value_vars=["점검비중", "사고비중"],
+            var_name="구분", value_name="비중")
+        figg = px.bar(gm, x="위험분류", y="비중", color="구분", barmode="group", height=380,
+                      color_discrete_map={"점검비중": SEBANG_GREEN, "사고비중": "#e45756"})
+        figg.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend_title="", yaxis_title="비중(%)")
+        st.plotly_chart(figg, width="stretch")
+        over = gb[gb["갭(사고-점검)"] > 5]
+        if not over.empty:
+            st.warning("⚠️ **" + gsel + "**에서 사고 대비 점검이 부족한 위험분류: "
+                       + ", ".join(f"**{h}**(+{gb.loc[h,'갭(사고-점검)']:.0f}%p)" for h in over.index))
+
+# ================================================================== TAB4 폭염 대응

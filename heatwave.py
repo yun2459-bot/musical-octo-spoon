@@ -436,34 +436,45 @@ def load_incident_reports_raw() -> pd.DataFrame | None:
     except Exception:
         return None
 
+    # 폼 문항이 늘어나면서 시트에 옛 문항 잔재 컬럼('물', '지사.1' 등)이 남아있을 수
+    # 있고, 부분일치 규칙을 잘못 쓰면 서로 다른 두 컬럼이 같은 이름으로 매핑돼 중복
+    # 컬럼이 생긴다(= Styler.apply가 KeyError로 죽는다). 그래서 아래 규칙은 판별력
+    # 높은 것부터 순서대로 검사하고, 한 번 매핑된 표준명은 다시 쓰지 않는다.
+    def _match(c: str) -> str | None:
+        if "타임스탬프" in c or "timestamp" in c.lower():
+            return "timestamp"
+        if c.strip() == "지사":
+            return "branch"
+        if "환자" in c:
+            return "환자수"
+        if "조정" in c and "건" in c:
+            return "작업조정"
+        if "중지" in c and "건" in c:
+            return "작업중지"
+        if "비상대응" in c or ("교육" in c and "물품" in c):
+            return "비상물품교육"
+        if "민감군" in c:
+            return "민감군"
+        if "바람" in c or "그늘" in c:
+            return "바람그늘"
+        if "휴식" in c:
+            return "휴식"
+        if "포도당" in c or ("물" in c and "관리" in c):
+            return "물"
+        if "점검" in c and "특이사항" in c:
+            return "점검특이사항"
+        if "상세" in c:
+            return "중지상세"
+        return None
+
     col_map = {}
     for col in df.columns:
-        c = str(col)
-        if "타임스탬프" in c or "timestamp" in c.lower():
-            col_map[col] = "timestamp"
-        elif c.strip() == "지사":
-            col_map[col] = "branch"
-        elif "환자" in c:
-            col_map[col] = "환자수"
-        elif "조정" in c and "건" in c:
-            col_map[col] = "작업조정"
-        elif "중지" in c and "건" in c:
-            col_map[col] = "작업중지"
-        elif "물" in c and ("포도당" in c or "관리" in c):
-            col_map[col] = "물"
-        elif "바람" in c or "그늘" in c:
-            col_map[col] = "바람그늘"
-        elif "휴식" in c:
-            col_map[col] = "휴식"
-        elif "비상대응" in c or ("교육" in c and "물품" in c):
-            col_map[col] = "비상물품교육"
-        elif "민감군" in c:
-            col_map[col] = "민감군"
-        elif "점검" in c and "특이사항" in c:
-            col_map[col] = "점검특이사항"
-        elif "상세" in c:
-            col_map[col] = "중지상세"
-    df = df.rename(columns=col_map)
+        std = _match(str(col))
+        if std and std not in col_map.values():
+            col_map[col] = std
+    # 매핑에 쓰인 컬럼만 남긴다 — 시트에 표준명과 똑같은 이름의 잔재 컬럼(예: 옛 문항 '물')이
+    # 그대로 있으면 rename 후 같은 이름이 둘이 되어 중복 컬럼이 생긴다.
+    df = df[list(col_map.keys())].rename(columns=col_map)
 
     # 작업중지/중지상세는 별도 폼("작업중지 즉시 보고")으로 분리돼 이 시트에는 더 이상
     # 새로 쌓이지 않는다 — 과거(분리 이전) 데이터는 남아있을 수 있어 있으면 읽고, 없으면
@@ -554,20 +565,27 @@ def load_stoppage_reports_raw() -> pd.DataFrame | None:
     except Exception:
         return None
 
+    # load_incident_reports_raw()와 같은 이유로, 한 번 매핑된 표준명은 다시 쓰지 않아
+    # 중복 컬럼이 생기지 않게 한다(옛 문항 잔재 컬럼이 시트에 남아있을 수 있음).
+    def _match(c: str) -> str | None:
+        if "타임스탬프" in c or "timestamp" in c.lower():
+            return "timestamp"
+        if c.strip() == "지사":
+            return "branch"
+        if "선택" in c and ("조정" in c or "중지" in c):
+            return "구분"
+        if "조정" in c and "분류" in c:
+            return "조정분류"
+        if "중지" in c and "상세" in c:
+            return "중지상세"
+        return None
+
     col_map = {}
     for col in df.columns:
-        c = str(col)
-        if "타임스탬프" in c or "timestamp" in c.lower():
-            col_map[col] = "timestamp"
-        elif c.strip() == "지사":
-            col_map[col] = "branch"
-        elif "선택" in c and ("조정" in c or "중지" in c):
-            col_map[col] = "구분"
-        elif "조정" in c and "분류" in c:
-            col_map[col] = "조정분류"
-        elif "중지" in c and "상세" in c:
-            col_map[col] = "중지상세"
-    df = df.rename(columns=col_map)
+        std = _match(str(col))
+        if std and std not in col_map.values():
+            col_map[col] = std
+    df = df[list(col_map.keys())].rename(columns=col_map)
 
     if not {"timestamp", "branch"}.issubset(df.columns):
         return None

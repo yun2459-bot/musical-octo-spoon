@@ -546,8 +546,11 @@ def patient_summary() -> dict:
     daily_last = (
         year_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
     )
-    cumulative = int(daily_last["환자수"].sum())
-    this_week_total = int(daily_last.loc[daily_last["date"] >= this_week, "환자수"].sum())
+    # 로더에서 이미 숫자로 바꾸지만, 배포 직후 st.cache_data에 남아있는 옛 캐시(문자열)가
+    # 그대로 넘어와 합계가 문자열로 이어붙는 사고가 있었다 — 쓰는 쪽에서 한 번 더 막는다.
+    counts = _to_count(daily_last["환자수"])
+    cumulative = int(counts.sum())
+    this_week_total = int(counts[daily_last["date"] >= this_week].sum())
     return {"cumulative": cumulative, "this_week": this_week_total}
 
 
@@ -696,6 +699,9 @@ def weekly_incident_totals() -> pd.DataFrame:
         if not week_rows.empty:
             week_rows["date"] = week_rows["timestamp"].dt.normalize()
             daily_last = week_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
+            # patient_summary와 같은 이유로, 합산 직전에 숫자형을 한 번 더 보장한다.
+            for c in ["환자수", "작업조정"]:
+                daily_last[c] = _to_count(daily_last[c])
             incident_agg = daily_last.groupby("branch", as_index=False).agg(
                 환자수=("환자수", "sum"), 작업조정=("작업조정", "sum"), 최근제출=("timestamp", "max"))
 

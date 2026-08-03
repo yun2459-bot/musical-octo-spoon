@@ -39,6 +39,9 @@ _PHOTO_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd4IeOzIzwZTfTuEv5JT
 # 작업중지 즉시 보고 전용 구글폼(별도 폼, HW.STOPPAGE_SHEET_CSV_URL이 읽는 그 폼) 제출 링크.
 _STOPPAGE_FORM_URL = "https://docs.google.com/forms/d/1pk8mc8krfbTuocYAO0MZW1peD5z8K288aRjl1XKXR6c/viewform"
 
+# 온열질환 발생 즉시 보고 전용 구글폼(별도 폼, HW.PATIENT_SHEET_CSV_URL이 읽는 그 폼) 제출 링크.
+_PATIENT_FORM_URL = "https://docs.google.com/forms/d/1hJrpkQfOviMaUNnb5bRvyRm-5XwERq1fPeoSfAdJCN4/viewform"
+
 
 def _branch_form_url(branch: str) -> str:
     return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
@@ -50,7 +53,7 @@ def _print_report_html() -> str:
     2페이지 구성 — 1p: 전체 현황 / 옥외 작업 중지 지사·상세 이유 / 주간 예방 점검
     결과(지사별), 2p: 지사별 활동 사진 1장씩. CSS의 page-break로 페이지를 나눈다.
     """
-    psum = HW.patient_summary()
+    esum = HW.patient_event_summary()
     obs = HW.load_observations()
     wmax = HW.weekly_max_by_branch(obs) if not obs.empty else pd.DataFrame()
     week_top = None
@@ -61,11 +64,19 @@ def _print_report_html() -> str:
 
     stoppages = HW.weekly_stoppage_reports()
     checklist = HW.weekly_checklist()
+    # 보고서에 넣을 사진은 기본적으로 지사별 최신 1장이지만, 화면에서 직접 고른 사진이
+    # 있으면 그것을 우선한다(st.session_state["_report_photo_pick"]: {지사: photo_url}).
     photos = HW.load_photo_reports()
-    photo_by_branch = (
-        photos.sort_values("timestamp", ascending=False).drop_duplicates(subset="branch")
-        if not photos.empty else photos
-    )
+    picks = st.session_state.get("_report_photo_pick", {})
+    if photos.empty:
+        photo_by_branch = photos
+    else:
+        latest = photos.sort_values("timestamp", ascending=False).drop_duplicates(subset="branch")
+        chosen = photos[photos.apply(
+            lambda r: picks.get(r["branch"]) == r["photo_url"], axis=1)]
+        # 고른 지사는 chosen 행으로, 나머지는 최신 행으로 채운다.
+        photo_by_branch = pd.concat(
+            [chosen, latest[~latest["branch"].isin(chosen["branch"])]], ignore_index=True)
     _, this_week = HW.this_and_last_week()
     week_end = this_week + pd.Timedelta(days=4)  # 월~금 근무 주간 기준
     period_label = f"{this_week.month}월 {this_week.day}일 ~ {week_end.month}월 {week_end.day}일"
@@ -74,7 +85,8 @@ def _print_report_html() -> str:
                 else "관측 데이터 없음")
     section1 = f"""
     <table class="rpt-table">
-      <tr><th>누적 온열질환 발생 인원</th><td>{psum['cumulative']}명</td></tr>
+      <tr><th>누적 온열질환 발생 인원</th><td>{esum['cumulative']}명</td></tr>
+      <tr><th>이번주 온열질환 발생</th><td>{esum['this_week']}명</td></tr>
       <tr><th>주간 최고 온도 사업장</th><td>{html.escape(top_line)}</td></tr>
       <tr><th>이번주 옥외 작업 중지</th><td>{len(stoppages)}건</td></tr>
     </table>
@@ -634,6 +646,9 @@ with tab4:
 
                     st.divider()
                     st.markdown("##### 🏥 사업장 온열질환 환자 발생 현황")
+                    # 공식 집계는 "발생 즉시 보고" 폼(사건 단위). 주차별 폼의 자기보고는
+                    # 교차검증용으로만 쓴다 — 두 값이 다르면 아래에서 지사를 짚어준다.
+                    esum = HW.patient_event_summary()
                     psum = HW.patient_summary()
                     today_label = HW.now_kst().strftime("%y.%m.%d")
                     th_style = (f"background:{SEBANG_DARK_GRAY}; color:white; padding:8px 4px; font-size:13px; "
@@ -647,11 +662,27 @@ with tab4:
                         f'<th style="{th_style}">26년(누적)</th>'
                         f'<th style="{th_style}">이번주</th></tr>'
                         f'<tr><td style="{td_style}">0명</td>'
-                        f'<td style="{td_style}">{psum["cumulative"]}명</td>'
-                        f'<td style="{td_style}">{psum["this_week"]}명</td></tr>'
+                        f'<td style="{td_style}">{esum["cumulative"]}명</td>'
+                        f'<td style="{td_style}">{esum["this_week"]}명</td></tr>'
                         '</table>',
                         unsafe_allow_html=True,
                     )
+                    _events = HW.weekly_patient_events()
+                    if not _events.empty:
+                        for _e in _events.itertuples():
+                            st.error(f"**{_e.branch}** {int(_e.환자수)}명 · {_e.증상 or '증상 미기재'} "
+                                     f"· {_e.timestamp.strftime('%m-%d %H:%M')}")
+                            if _e.상세:
+                                st.text(_e.상세)
+                    _mis = HW.patient_report_mismatch()
+                    if not _mis.empty:
+                        _rows = ", ".join(
+                            f"{r.branch}(즉시 {r.즉시보고}명 / 주간 {r.주간보고}명)" for r in _mis.itertuples())
+                        st.warning(f"⚠️ 즉시보고와 주간보고 환자 수가 다른 지사: {_rows} — 어느 쪽을 "
+                                   "누락했는지 해당 지사에 확인이 필요합니다.", icon="⚠️")
+                    st.link_button("🏥 온열질환 발생 보고하기", _PATIENT_FORM_URL, width="stretch")
+                    st.caption("표의 숫자 = '온열질환 발생 즉시 보고' 제출 기준(공식 집계). "
+                               "주차별 폼의 '금주 환자 수'는 교차검증용으로만 사용합니다.")
 
                     st.divider()
                     st.markdown("##### 🚨 작업조정·중지 보고")
@@ -812,6 +843,32 @@ with tab4:
                 """
                 components.html(carousel_html, height=270, scrolling=False)
                 st.caption("사진 아래 캡션 = 올린 지사 · 제출시각. 좌우 화살표 또는 마우스 드래그/트랙패드로 넘길 수 있습니다.")
+
+                # 인쇄 보고서에 넣을 사진을 지사별로 직접 고른다 — 기본값은 최신 사진이라
+                # 그대로 둬도 되고, 보고에 더 적합한 장면이 있으면 바꿀 수 있게 한다.
+                with st.expander("🖨️ 보고서에 넣을 사진 고르기 (기본: 지사별 최신 사진)"):
+                    picks = dict(st.session_state.get("_report_photo_pick", {}))
+                    changed = False
+                    for _b in [b for b in HW.branch_order() if b in set(photos["branch"])]:
+                        _bp = photos[photos["branch"] == _b].sort_values("timestamp", ascending=False)
+                        _labels = ["최신 사진 (기본)"] + [
+                            f'{r.timestamp.strftime("%m-%d %H:%M")}' for r in _bp.itertuples()]
+                        _urls = [None] + _bp["photo_url"].tolist()
+                        _cur = picks.get(_b)
+                        _idx = _urls.index(_cur) if _cur in _urls else 0
+                        _sel = st.selectbox(f"{_b} ({len(_bp)}장)", _labels, index=_idx,
+                                            key=f"_photopick_{_b}")
+                        _new = _urls[_labels.index(_sel)]
+                        if _new != picks.get(_b):
+                            changed = True
+                            if _new is None:
+                                picks.pop(_b, None)
+                            else:
+                                picks[_b] = _new
+                    if changed:
+                        st.session_state["_report_photo_pick"] = picks
+                    st.caption("고른 사진은 위 \"🖨️ 주간 보고서 인쇄\" 버튼으로 뽑는 보고서에 반영됩니다. "
+                               "선택은 이 브라우저 세션에서만 유지되며, 새로고침하면 최신 사진으로 돌아갑니다.")
             else:
                 st.info("아직 업로드된 사진이 없습니다.")
 

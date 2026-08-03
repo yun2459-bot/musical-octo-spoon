@@ -57,6 +57,14 @@ STOPPAGE_SHEET_CSV_URL = (
     "pub?gid=473275652&single=true&output=csv"
 )
 
+# 온열질환 발생 즉시 보고 전용 구글폼(별도 폼) 응답 시트를 "웹에 게시"로 발행한 CSV 링크.
+# 환자 발생은 주간 정기보고를 기다릴 수 없어 별도 폼으로 즉시 받는다. 비어 있으면
+# 관련 집계가 0으로 폴백하고, 주차별 폼의 "금주 환자 수"는 교차검증용으로 계속 쓴다.
+PATIENT_SHEET_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vRfRHrwSzyVKtL_YBe7mzWpfDlrZWfctO28RIrO9A7J4tSOfTZbj0ItjNiKxkpNv9kOzQbXAKwmorqh/"
+    "pub?gid=870352651&single=true&output=csv"
+)
+
 LEVEL_ORDER = ["주의", "경고", "위험"]
 LEVEL_COLOR = {"주의": "#f4d35e", "경고": "#f2a154", "위험": "#c81d25"}
 NORMAL_COLOR = "#6fb56f"
@@ -589,6 +597,107 @@ def _season_bounds(year: int) -> tuple[pd.Timestamp, pd.Timestamp]:
     start = pd.Timestamp(year, *SEASON_START_MD)
     end = pd.Timestamp(year, *SEASON_END_MD, 23, 59, 59)
     return start, end
+
+
+@st.cache_data(ttl=300)
+def load_patient_reports_raw() -> pd.DataFrame | None:
+    """온열질환 발생 즉시 보고 폼(별도 폼) 응답 시트를 읽어 제출행 전부 반환.
+
+    사건 1건당 1행이며 한 건에 여러 명일 수 있어 "환자수" 문항을 함께 받는다.
+    "1명"처럼 단위를 붙인 객관식 응답이 들어오므로 _to_count로 숫자만 뽑는다.
+    URL 미설정/조회 실패/필수 컬럼 없음이면 None을 반환해 호출부가 0으로 폴백한다.
+    """
+    if not PATIENT_SHEET_CSV_URL:
+        return None
+    try:
+        df = pd.read_csv(PATIENT_SHEET_CSV_URL)
+    except Exception:
+        return None
+
+    def _match(c: str) -> str | None:
+        if "타임스탬프" in c or "timestamp" in c.lower():
+            return "timestamp"
+        if c.strip() == "지사":
+            return "branch"
+        if "환자" in c:
+            return "환자수"
+        if "증상" in c:
+            return "증상"
+        if "경위" in c or "조치" in c:
+            return "상세"
+        return None
+
+    col_map = {}
+    for col in df.columns:
+        std = _match(str(col))
+        if std and std not in col_map.values():
+            col_map[col] = std
+    df = df[list(col_map.keys())].rename(columns=col_map)
+
+    if not {"timestamp", "branch"}.issubset(df.columns):
+        return None
+    for c in ["증상", "상세"]:
+        if c not in df.columns:
+            df[c] = ""
+    if "환자수" not in df.columns:
+        df["환자수"] = 1
+
+    df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
+    df["branch"] = df["branch"].astype(str).str.strip()
+    df = df.dropna(subset=["branch", "timestamp"])
+    if df.empty:
+        return df
+    for c in ["증상", "상세"]:
+        df[c] = df[c].fillna("")
+    df["환자수"] = _to_count(df["환자수"])
+    return df.sort_values("timestamp")[["branch", "환자수", "증상", "상세", "timestamp"]]
+
+
+def patient_event_summary() -> dict:
+    """온열질환 발생 즉시 보고 기준 환자 수: 올해 누적 / 이번주 / 금일.
+
+    주차별 폼의 자기보고(patient_summary)와 달리 사건 단위 기록이라 이 값이 공식
+    집계다. 두 값이 어긋나면 어느 지사가 주간 보고를 누락했는지 찾는 단서가 된다.
+    """
+    raw = load_patient_reports_raw()
+    if raw is None or raw.empty:
+        return {"cumulative": 0, "this_week": 0, "today": 0}
+    now = now_kst()
+    _, this_week = this_and_last_week()
+    year = raw[raw["timestamp"].dt.year == now.year]
+    return {
+        "cumulative": int(year["환자수"].sum()),
+        "this_week": int(year.loc[year["timestamp"] >= this_week, "환자수"].sum()),
+        "today": int(year.loc[year["timestamp"].dt.normalize() == now.normalize(), "환자수"].sum()),
+    }
+
+
+def weekly_patient_events() -> pd.DataFrame:
+    """이번주 접수된 온열질환 발생 보고 전체 — 최신순(인쇄 보고서/화면 카드용)."""
+    cols = ["branch", "환자수", "증상", "상세", "timestamp"]
+    raw = load_patient_reports_raw()
+    if raw is None or raw.empty:
+        return pd.DataFrame(columns=cols)
+    _, this_week = this_and_last_week()
+    return raw[raw["timestamp"] >= this_week][cols].sort_values("timestamp", ascending=False)
+
+
+def patient_report_mismatch() -> pd.DataFrame:
+    """지사별 [즉시보고 환자수] vs [주차별 폼 자기보고 환자수] 차이 — 누락 지사 추적용.
+
+    두 숫자가 다르면 그 지사가 둘 중 하나를 빠뜨렸다는 뜻이라, 어디를 확인해야
+    하는지 바로 알 수 있다. 차이가 없는 지사는 반환하지 않는다.
+    """
+    events = weekly_patient_events()
+    weekly = weekly_incident_totals()
+    ev = (events.groupby("branch", as_index=False)["환자수"].sum()
+          .rename(columns={"환자수": "즉시보고"}) if not events.empty
+          else pd.DataFrame(columns=["branch", "즉시보고"]))
+    wk = weekly[["branch", "환자수"]].rename(columns={"환자수": "주간보고"})
+    m = wk.merge(ev, on="branch", how="outer")
+    m["즉시보고"] = m["즉시보고"].fillna(0).astype(int)
+    m["주간보고"] = m["주간보고"].fillna(0).astype(int)
+    return m[m["즉시보고"] != m["주간보고"]].reset_index(drop=True)
 
 
 @st.cache_data(ttl=300)

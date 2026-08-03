@@ -105,7 +105,15 @@ def _print_report_html() -> str:
             )
             note = html.escape(str(r.점검특이사항) or "")
             rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}<td>{note}</td></tr>")
-        section3 = f'<table class="rpt-table small"><tr><th>지사</th>{head_cols}<th>특이사항</th></tr>{"".join(rows3)}</table>'
+        n_status = len(HW.CHECKLIST_FIELDS)
+        status_w = 76 / n_status  # 지사 8% + 특이사항 16% 나머지를 상태 칸 5개가 균등 분배
+        colgroup = (
+            '<colgroup><col style="width:8%">'
+            + f'<col style="width:{status_w:.1f}%">' * n_status
+            + '<col style="width:16%"></colgroup>'
+        )
+        section3 = (f'<table class="rpt-table small">{colgroup}'
+                    f'<tr><th>지사</th>{head_cols}<th>특이사항</th></tr>{"".join(rows3)}</table>')
 
     # 사진이 없는 지사도 "그 지사엔 아직 없다"는 게 보이도록 빈 칸으로 채워서 전체
     # 지사를 다 늘어놓는다 — 있는 지사만 나오면 빠진 지사가 안 보여 헷갈린다.
@@ -155,7 +163,9 @@ def _render_print_report_button() -> None:
     .rpt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
     .rpt-table th, .rpt-table td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; }
     .rpt-table th { background: #eee; }
-    .rpt-table.small th, .rpt-table.small td { font-size: 10.5px; padding: 3px 5px; }
+    .rpt-table.small { table-layout: fixed; }
+    .rpt-table.small th, .rpt-table.small td { font-size: 10.5px; padding: 3px 5px;
+        word-break: keep-all; overflow-wrap: break-word; }
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
     .rpt-empty { color: #888; font-size: 12px; }
     .rpt-page { page-break-after: always; }

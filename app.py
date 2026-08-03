@@ -31,6 +31,11 @@ import heatwave as HW
 # 바뀌는 한 별도 유지보수가 필요 없다.
 _FORM_BASE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSe8QFLQbs3KwCUVMqHFv-C0gLVdDcILhcsctKUDHbHP8DgGRg/viewform"
 
+# 현장 사진 전용 구글폼(별도 폼, PHOTO_SHEET_CSV_URL이 읽는 그 폼) 제출 링크. 파일 업로드
+# 문항이 있는 폼이라 구글 정책상 응답자가 구글 계정으로 로그인해야 제출 가능하다(폼 설정으로
+# 끌 수 없는 제약 — 사내 구글 계정으로 로그인하면 정상 제출됨).
+_PHOTO_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd4IeOzIzwZTfTuEv5JT0nr8eDBNrNZMs_EwXRisyayhhj66Q/viewform"
+
 
 def _branch_form_url(branch: str) -> str:
     return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
@@ -493,7 +498,8 @@ with tab4:
                             text += f' · 기상청 공식 폭염{d["official_advisory"]} 발효중'
                         return text
 
-                    def _marker_image(color: str, badge: str, label: str, is_estimate: bool, is_office: bool):
+                    def _marker_image(color: str, badge: str, label: str, is_estimate: bool, is_office: bool,
+                                       is_advisory: bool = False):
                         """원(체감온도 배지) + 아래 라벨 칩을 SVG 하나로 그려 data URI로 반환.
 
                         카카오맵 CustomOverlay(임의 HTML 오버레이)가 이 배포 환경에서 DOM에 붙지
@@ -501,6 +507,10 @@ with tab4:
                         마커 이미지로 대체했다 — 렌더링을 브라우저의 기본 <img> 디코딩에 맡기므로
                         더 안정적이다. 반환값: (data URI, 전체폭, 전체높이, 앵커x, 앵커y) — 앵커는
                         원의 중심(=실제 좌표가 가리키는 지점)이다.
+
+                        is_advisory=True면 폭염특보 사이렌(🚨)을 라벨 텍스트 앞이 아니라 원 오른쪽
+                        위쪽에 작은 배지로 그린다 — 지도에 마커가 촘촘히 찍혀 있을 때 라벨 텍스트
+                        속에 묻히지 않고 한눈에 띄도록.
                         """
                         d = 42 if is_office else 28
                         font_size = 14 if is_office else 10
@@ -510,18 +520,37 @@ with tab4:
                         gap = 3
                         w, h = max(d, label_w), d + gap + label_h
                         cx, cy = w / 2, d / 2
+                        r = d / 2 - 1.5
+                        # 사이렌 배지가 원 바깥(오른쪽 위)으로 튀어나오는 만큼 캔버스에 여백을
+                        # 더해준다 — 안 그러면 잘려 보인다. 기존 원·라벨 좌표는 아래로 pad만큼
+                        # 그대로 밀어서(y_shift) 앵커(=실제 좌표 지점)만 새 위치로 갱신하면 된다.
+                        badge_r = 7
+                        pad = badge_r + 3 if is_advisory else 0
+                        w = w + pad  # 가로는 원 중심(cx) 유지, 오른쪽 여백만 늘어남
+                        h = h + pad
+                        cy = cy + pad
                         dash = ' stroke-dasharray="4,3"' if is_estimate else ""
                         badge_e, label_e = html.escape(badge), html.escape(label)
+                        advisory_svg = ""
+                        if is_advisory:
+                            bcx, bcy = cx + r * 0.72, cy - r * 0.72
+                            advisory_svg = (
+                                f'<circle cx="{bcx}" cy="{bcy}" r="{badge_r}" fill="white" '
+                                f'stroke="#c81d25" stroke-width="1.5"/>'
+                                f'<text x="{bcx}" y="{bcy + 1}" text-anchor="middle" dominant-baseline="central" '
+                                f'font-size="10">🚨</text>'
+                            )
                         svg = (
                             f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
-                            f'<circle cx="{cx}" cy="{cy}" r="{d / 2 - 1.5}" fill="{color}" '
+                            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" '
                             f'stroke="white" stroke-width="2"{dash}/>'
                             f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
                             f'font-size="{font_size}" font-weight="700" fill="white" '
                             f'font-family="sans-serif">{badge_e}</text>'
-                            f'<rect x="{cx - label_w / 2}" y="{d + gap}" width="{label_w}" height="{label_h}" '
+                            f'{advisory_svg}'
+                            f'<rect x="{cx - label_w / 2}" y="{d + gap + pad}" width="{label_w}" height="{label_h}" '
                             f'rx="3" fill="white" fill-opacity="0.85"/>'
-                            f'<text x="{cx}" y="{d + gap + label_h / 2}" text-anchor="middle" '
+                            f'<text x="{cx}" y="{d + gap + label_h / 2 + pad}" text-anchor="middle" '
                             f'dominant-baseline="central" font-size="{label_font}" font-weight="700" '
                             f'fill="#111" font-family="sans-serif">{label_e}</text>'
                             f'</svg>'
@@ -535,9 +564,10 @@ with tab4:
                     markers = []
                     for c in clusters:
                         badge = f'{"~" if c.get("is_estimate") else ""}{c["apparent_temp"]:.0f}°' if c["has_data"] else "–"
-                        label = ("🚨 " if c.get("official_advisory") else "") + c["branch"]
+                        label = c["branch"]
                         img, w, h, ax, ay = _marker_image(HW.level_color(c["level"]), badge, label,
-                                                           bool(c.get("is_estimate")), True)
+                                                           bool(c.get("is_estimate")), True,
+                                                           is_advisory=bool(c.get("official_advisory")))
                         markers.append({
                             "lat": c["lat"], "lon": c["lon"], "img": img, "w": w, "h": h, "ax": ax, "ay": ay,
                             "title": f'{c["branch"]} {c["city"]}(사무실) · {_marker_detail(c)}',
@@ -603,74 +633,108 @@ with tab4:
                             '<div style="font-size:12px; color:#666; margin-top:10px;">🚨 = 폭염특보 발생</div>',
                             unsafe_allow_html=True)
 
-            with col_kpi:
-                st.subheader("🔥 현재 최고 체감온도 지사")
-                summary_now = HW.branch_summary(obs)
-                hot = summary_now[summary_now["has_data"]] if not summary_now.empty else summary_now
-                if hot.empty:
-                    st.info("관측 데이터가 있는 지사가 아직 없습니다.")
-                else:
-                    top = hot.loc[hot["apparent_temp"].idxmax()]
-                    est_prefix = "~" if top["is_estimate"] else ""
-                    st.metric(
-                        label=f'{top["branch"]} · {top["worst_city"]}',
-                        value=f'{est_prefix}{top["apparent_temp"]:.1f}℃',
+                    latest_obs = obs["observed_at"].max() if not obs.empty else None
+                    st.caption(
+                        "📡 출처: 기상청 API허브 방재기상관측(AWS) 매분자료"
+                        + (f" · 최신 관측 {latest_obs.strftime('%m-%d %H:%M')} 기준"
+                           if pd.notna(latest_obs) else " · 관측 데이터 없음")
+                        + " · 체감온도는 기상청 여름철 체감온도 공식으로 산출한 추정치이며, 실측 WBGT가 "
+                          "아니라 백엽상 기준값이라 아스팔트·컨테이너 복사열이 심한 현장의 실제 체감과 "
+                          "다를 수 있습니다."
                     )
-                    st.caption(f'{HW.level_label(top["level"])} 단계'
-                               + (" · 자체 관측지점 없어 추정치" if top["is_estimate"] else "")
-                               + (f' · 🚨 기상청 공식 폭염{top["official_advisory"]} 발효중'
-                                  if top.get("official_advisory") else ""))
 
-                st.markdown("##### 🏥 사업장 온열질환 환자 발생 현황")
-                psum = HW.patient_summary()
-                today_label = pd.Timestamp.now().strftime("%y.%m.%d")
-                th_style = (f"background:{SEBANG_DARK_GRAY}; color:white; padding:8px 4px; font-size:13px; "
-                            f"border:1px solid {SEBANG_DARK_GRAY};")
-                td_style = (f"background:{SEBANG_LIGHT_GRAY_1}; color:{SEBANG_DARK_GRAY}; padding:12px 4px; "
-                            f"font-size:16px; font-weight:700; border:1px solid {SEBANG_LIGHT_GRAY_2};")
-                st.markdown(
-                    '<table style="width:100%; border-collapse:collapse; text-align:center; '
-                    'font-family:\'SEBANG Gothic\',sans-serif; margin-bottom:8px;">'
-                    f'<tr><th style="{th_style}">25년(전년도)</th>'
-                    f'<th style="{th_style}">26년(누적)</th>'
-                    f'<th style="{th_style}">금일({today_label})</th></tr>'
-                    f'<tr><td style="{td_style}">집계 없음</td>'
-                    f'<td style="{td_style}">{psum["cumulative"]}명</td>'
-                    f'<td style="{td_style}">{psum["today"]}명</td></tr>'
-                    '</table>',
-                    unsafe_allow_html=True,
-                )
-                st.caption("25년(전년도) = 온열질환 신고 체계가 이번 시즌 처음 도입돼 원천 데이터 없음. "
-                           "26년(누적) = 올해 구글폼 신규 발생 제출분 합계. 금일 = 오늘 제출분만(자정 리셋).")
+            with col_kpi:
+                # 왼쪽 지도(높이 615px 고정)와 시각적으로 짝이 맞도록, 오른쪽도 같은 높이의
+                # 카드 하나로 감싼다 — 내용이 지도보다 짧아도 빈 여백만 남기고 뚝 끊기지
+                # 않게, 구분선(divider)으로 세 블록의 리듬을 채운다.
+                with st.container(height=615, border=True):
+                    st.subheader("🔥 현재 최고 체감온도 지사")
+                    summary_now = HW.branch_summary(obs)
+                    hot = summary_now[summary_now["has_data"]] if not summary_now.empty else summary_now
+                    if hot.empty:
+                        st.info("관측 데이터가 있는 지사가 아직 없습니다.")
+                    else:
+                        top = hot.loc[hot["apparent_temp"].idxmax()]
+                        est_prefix = "~" if top["is_estimate"] else ""
+                        st.metric(
+                            label=f'{top["branch"]} · {top["worst_city"]}',
+                            value=f'{est_prefix}{top["apparent_temp"]:.1f}℃',
+                        )
+                        st.caption(f'{HW.level_label(top["level"])} 단계'
+                                   + (" · 자체 관측지점 없어 추정치" if top["is_estimate"] else "")
+                                   + (f' · 🚨 기상청 공식 폭염{top["official_advisory"]} 발효중'
+                                      if top.get("official_advisory") else ""))
 
-                st.markdown("##### 🚨 작업중지 보고")
-                stoppages = HW.today_stoppages()
-                if stoppages.empty:
-                    st.info("금일 작업중지 보고 없음")
-                else:
-                    for row in stoppages.itertuples():
-                        # 중지상세는 구글폼 자유서술 입력이라, 마크다운 문법(링크 등)이 그대로
-                        # 해석되지 않도록 본문(st.error)과 분리해 일반 텍스트로만 표시한다.
-                        detail = row.중지상세 or "(상세 미기재)"
-                        st.error(f"**{row.branch}** 작업중지 {int(row.작업중지)}건")
-                        st.text(detail)
+                    st.divider()
+                    st.markdown("##### 🏥 사업장 온열질환 환자 발생 현황")
+                    psum = HW.patient_summary()
+                    today_label = HW.now_kst().strftime("%y.%m.%d")
+                    th_style = (f"background:{SEBANG_DARK_GRAY}; color:white; padding:8px 4px; font-size:13px; "
+                                f"border:1px solid {SEBANG_DARK_GRAY};")
+                    td_style = (f"background:{SEBANG_LIGHT_GRAY_1}; color:{SEBANG_DARK_GRAY}; padding:12px 4px; "
+                                f"font-size:16px; font-weight:700; border:1px solid {SEBANG_LIGHT_GRAY_2};")
+                    st.markdown(
+                        '<table style="width:100%; border-collapse:collapse; text-align:center; '
+                        'font-family:\'SEBANG Gothic\',sans-serif; margin-bottom:8px;">'
+                        f'<tr><th style="{th_style}">25년(전년도)</th>'
+                        f'<th style="{th_style}">26년(누적)</th>'
+                        f'<th style="{th_style}">이번주</th></tr>'
+                        f'<tr><td style="{td_style}">집계 없음</td>'
+                        f'<td style="{td_style}">{psum["cumulative"]}명</td>'
+                        f'<td style="{td_style}">{psum["this_week"]}명</td></tr>'
+                        '</table>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("25년(전년도) = 온열질환 신고 체계가 이번 시즌 처음 도입돼 원천 데이터 없음. "
+                               "26년(누적) = 올해 지사·주차별 제출값(이번주 누적) 합계. 이번주 = 이번 주차의 "
+                               "최근 제출값(월요일 리셋).")
+
+                    st.divider()
+                    st.markdown("##### 🚨 작업중지 보고")
+                    ssum = HW.stoppage_summary()
+                    st.markdown(
+                        '<table style="width:100%; border-collapse:collapse; text-align:center; '
+                        'font-family:\'SEBANG Gothic\',sans-serif; margin-bottom:8px;">'
+                        f'<tr><th style="{th_style}">시즌 누적(06.01~09.30)</th>'
+                        f'<th style="{th_style}">금일({today_label})</th></tr>'
+                        f'<tr><td style="{td_style}">{ssum["season_cumulative"]}건</td>'
+                        f'<td style="{td_style}">{ssum["today"]}건</td></tr>'
+                        '</table>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("시즌 누적 = 온열질환 예방 기간(6/1~9/30) 내 지사·일자별 마지막 제출값 합계"
+                               "(보고는 하루 단위지만 집계는 시즌 내내 계속 쌓입니다). 금일 = 오늘 제출분만.")
+                    stoppages = HW.today_stoppages()
+                    if stoppages.empty:
+                        st.info("금일 작업중지 보고 없음")
+                    else:
+                        for row in stoppages.itertuples():
+                            # 중지상세는 구글폼 자유서술 입력이라, 마크다운 문법(링크 등)이 그대로
+                            # 해석되지 않도록 본문(st.error)과 분리해 일반 텍스트로만 표시한다.
+                            detail = row.중지상세 or "(상세 미기재)"
+                            st.error(f"**{row.branch}** 작업중지 {int(row.작업중지)}건")
+                            st.text(detail)
+                    st.link_button("🚨 지금 작업중지 보고하기", _FORM_BASE_URL, width="stretch")
 
             st.markdown("---")
-            st.subheader("🚨 지사별 온열질환·조치 현황")
+            st.subheader("📅 주차별 온열질환 대응 현황")
             if not HW.GOOGLE_SHEET_CSV_URL:
-                st.warning("⚠️ 구글폼 응답 시트가 아직 연결되지 않아 전부 기본값입니다. "
+                st.warning("⚠️ 구글폼 응답 시트가 아직 연결되지 않아 전부 0으로 표시됩니다. "
                            "`heatwave.py`의 GOOGLE_SHEET_CSV_URL을 채우면 실제 제출값으로 바뀝니다.", icon="⚠️")
-            incident = HW.incident_status()
-            if not incident.empty:
-                incident["이슈"] = (incident["환자수"] > 0) | (incident["작업조정"] > 0) | (incident["작업중지"] > 0)
-                incident = incident.sort_values(
+            weekly_incident = HW.weekly_incident_totals()
+            if not weekly_incident.empty:
+                weekly_incident["이슈"] = ((weekly_incident["환자수"] > 0) | (weekly_incident["작업조정"] > 0)
+                                          | (weekly_incident["작업중지"] > 0))
+                weekly_incident = weekly_incident.sort_values(
                     ["이슈", "환자수", "작업중지", "작업조정"], ascending=[False, False, False, False])
-                display_df = incident[
-                    ["branch", "환자수", "작업조정", "작업중지", "중지상세", "제출 현황", "제출시각"]
+                display_df = weekly_incident[
+                    ["branch", "환자수", "작업조정", "작업중지", "최근제출"]
                 ].rename(columns={"branch": "지사"})
                 display_df["환자수"] = display_df["환자수"].map(lambda n: f"{int(n)}명")
                 display_df["작업조정"] = display_df["작업조정"].map(lambda n: f"{int(n)}건")
                 display_df["작업중지"] = display_df["작업중지"].map(lambda n: f"{int(n)}건")
+                display_df["최근제출"] = display_df["최근제출"].apply(
+                    lambda t: t.strftime("%m-%d %H:%M") if pd.notna(t) else "이번주 제출 없음")
                 display_df["보고"] = display_df["지사"].map(_branch_form_url)
 
                 def _highlight_issue(row):
@@ -682,19 +746,22 @@ with tab4:
                     display_df.style.apply(_highlight_issue, axis=1),
                     width="stretch", hide_index=True,
                     column_config={
-                        "중지상세": st.column_config.TextColumn(width="large"),
+                        "최근제출": st.column_config.TextColumn("최근 제출"),
                         "보고": st.column_config.LinkColumn("보고", display_text="📝 보고하기", width="small"),
                     },
                 )
-                st.caption("빨간 행 = 환자 발생 또는 작업조정/중지가 있는 지사(맨 위로 정렬). "
-                           "\"제출됨\" = 지사에서 구글폼으로 실제 보고한 값, \"기본값(미제출)\" = 아직 아무도 보고하지 않음. "
-                           "\"중지상세\" = 작업중지 건별 사업장·작업내용·중지시간(자유서술, 여러 건은 줄바꿈으로 구분). "
-                           "\"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 새 탭에서 열립니다.")
+                st.caption("환자수/작업조정 = 응답자가 매번 직접 입력하는 **이번주 누적**값 중 이번주 최근 "
+                           "제출값. 작업중지 = 매일 신규 건수 문항을 **이번주 날짜별로 합산**. 빨간 행 = "
+                           "이번주 수치가 0보다 큰 지사(맨 위로 정렬). \"최근 제출\" = 이번주 중 그 지사의 "
+                           "마지막 제출 시각. \"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 "
+                           "새 탭에서 열립니다. 작업중지 상세 내용은 \"보고\" 링크로 직접 확인하세요.")
 
             photos = HW.load_photo_reports()
+            st.markdown("---")
+            st.subheader("📸 현장 활동 사진")
+            st.link_button("📸 현장 사진 보고하기", _PHOTO_FORM_URL, width="stretch")
+            st.caption("사진 업로드 문항이 있어 제출 시 구글 계정 로그인이 필요합니다.")
             if not photos.empty:
-                st.markdown("---")
-                st.subheader("📸 현장 활동 사진")
                 # p.branch/p.photo_url은 구글시트 응답(외부 입력)이라 raw HTML(components.html)에
                 # 꽂기 전에 반드시 이스케이프한다 — 폼이 드롭다운이라 지금은 안전해 보여도,
                 # 시트를 직접 수정하거나 필드가 자유서술로 바뀌면 스크립트 삽입 경로가 된다.
@@ -726,69 +793,16 @@ with tab4:
                 """
                 components.html(carousel_html, height=270, scrolling=False)
                 st.caption("사진 아래 캡션 = 올린 지사 · 제출시각. 좌우 화살표 또는 마우스 드래그/트랙패드로 넘길 수 있습니다.")
+            else:
+                st.info("아직 업로드된 사진이 없습니다.")
 
             st.markdown("---")
-            st.subheader("🚦 지사별 실시간 현황")
-            summary = HW.branch_summary(obs)
-            data_summary = summary[summary["has_data"]] if not summary.empty else summary
-            if data_summary.empty:
-                st.info("관측지점이 확정된 지사가 아직 없습니다.")
-            else:
-                rows_of_cards = [data_summary.iloc[i:i + 4] for i in range(0, len(data_summary), 4)]
-                for chunk in rows_of_cards:
-                    cols = st.columns(4)
-                    for col, row in zip(cols, chunk.itertuples()):
-                        level = HW.level_label(row.level)
-                        color = HW.level_color(row.level)
-                        source_city = row.estimate_source.split(" ")[-1] if row.is_estimate else row.worst_city
-                        with col:
-                            st.markdown(
-                                f"""
-                                <div style="border:1px solid #e2e2e2; border-radius:10px; padding:14px;
-                                            text-align:center; height:168px; box-sizing:border-box;
-                                            display:flex; flex-direction:column; justify-content:space-between;">
-                                  <div>
-                                    <div style="font-size:15px; font-weight:700;">
-                                      {'🚨 ' if row.official_advisory else ''}{row.branch}
-                                    </div>
-                                    <div style="font-size:11px; color:#999; margin-bottom:4px; word-break:keep-all;">
-                                      {'/'.join(row.cities)}
-                                    </div>
-                                    <div style="font-size:26px; font-weight:700; margin:4px 0; white-space:nowrap;">
-                                      {row.apparent_temp:.1f}°C
-                                    </div>
-                                    <div style="display:inline-block; padding:3px 10px; border-radius:12px;
-                                                background:{color}; color:white; font-size:13px;">{level}</div>
-                                  </div>
-                                  <div style="font-size:11px; color:#888;">
-                                    기준: {source_city}<br>{row.observed_at.strftime('%m-%d %H:%M')}
-                                  </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                    for col in cols[len(chunk):]:
-                        col.empty()
-            st.caption("체감온도 기준(세방 SAFETY TF): 주의 33℃ · 경고 35℃ · 위험 38℃ · 배지 온도는 지사 내 도시 중 최고값입니다.")
-
             with st.expander("⚖️ 고용노동부 규정 개정 참고사항"):
                 st.markdown(
                     "**세방 SAFETY TF(사내 기준)**: 주의 33℃ · 경고 35℃ · 위험 38℃\n\n"
                     "2025년 7월 17일 「산업안전보건기준에 관한 규칙」 개정으로 **체감온도 31℃ 이상을 "
                     "'폭염 작업'으로 정의**하고, 그 구간에서 체감온도 측정·기록과 조치(냉방·통풍장치/"
                     "작업시간 조정/휴식 중 1개 이상) 이행이 법적 의무가 됐습니다."
-                )
-                st.warning(
-                    "⚠️ **찾아보니 자료마다 단계 이름·추가 온도 구간(33℃ 이상 구간의 세부 의무 등)이 "
-                    "서로 다르게 나옵니다** — 개정 과정에서 일부 조항(2시간마다 20분 휴식 등)이 "
-                    "규제개혁위원회 철회 권고를 거치는 등 수정이 있었던 것으로 보여, 최종 확정된 "
-                    "정확한 단계 구성을 여기서 단정하지 않았습니다. **31~32℃ 구간이 이 대시보드에는 "
-                    "'정상'(초록색)으로 표시되지만, 법적으로는 이미 '폭염 작업' 구간(조치 의무 발생)일 "
-                    "수 있다는 점만 확실하니**, 정확한 단계별 기준은 moel.go.kr 원문이나 사내 법무·"
-                    "노무 담당자를 통해 직접 확인하시고, 필요하면 사내 기준 정렬 여부를 검토해보시길 "
-                    "권합니다(임계값 자체를 바꾸는 건 알림 발송 시점이 바뀌는 운영 결정이라 제가 "
-                    "임의로 바꾸지 않았습니다).",
-                    icon="⚠️",
                 )
                 st.caption("출처: 고용노동부 정책자료(2025.7), 김·장 법률사무소 규정 해설 등 — 개정 진행 "
                            "경과가 있어 법령 원문(moel.go.kr) 확인을 권합니다.")

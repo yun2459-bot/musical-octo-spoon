@@ -13,11 +13,25 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 import yaml
+
+_KST = timezone(timedelta(hours=9))
+
+
+def now_kst() -> pd.Timestamp:
+    """한국 표준시 기준 '지금'을 tz 정보 없는 값으로 반환.
+
+    Streamlit Cloud 등 배포 서버는 시스템 시각이 UTC라, pd.Timestamp.now()를 그대로
+    쓰면 매일 00~09시(KST)에는 아직 전날로 계산돼 "금일/이번주" 경계가 하루 어긋난다.
+    observed_at 등 DB에 쌓인 타임스탬프는 전부 KST 기준 naive 값이므로, 비교가
+    어긋나지 않도록 여기서도 tz 정보를 뗀 KST naive 값으로 맞춘다.
+    """
+    return pd.Timestamp.now(tz=_KST).tz_localize(None)
 
 HEATWAVE_DATA_DIR = Path(__file__).parent / "heatwave_data"
 ALERTS_DB_PATH = HEATWAVE_DATA_DIR / "alerts.db"
@@ -321,7 +335,7 @@ def this_and_last_week() -> tuple[pd.Timestamp, pd.Timestamp]:
     사람 손 안 대도 저절로 굴러간다. 파일럿 시작 직후처럼 지난주에 데이터가 없으면
     왼쪽 패널이 빈 채로 뜨는 게 정상이며, 한 주가 지나면 자동으로 채워진다.
     """
-    today = pd.Timestamp.now().normalize()
+    today = now_kst().normalize()
     this_week = _week_start(today)
     return this_week - pd.Timedelta(days=7), this_week
 
@@ -456,26 +470,66 @@ def load_incident_reports() -> pd.DataFrame | None:
 
 
 def patient_summary() -> dict:
-    """온열질환 환자수 전사 합계: 26년(올해) 누적, 금일.
+    """온열질환 환자수 전사 합계: 26년(올해) 누적, 이번주.
 
-    구글폼 문항이 "금일 누적 온열질환 의심 환자 수"(그날의 최종 누적값, 신규 발생분이
-    아님)이므로, 같은 지사가 하루에 여러 번 제출해도 그날의 마지막 제출값만 그날의
-    대표값으로 쓴다 — 전부 더하면 같은 하루가 중복 합산된다. 연간 누적은 지사·일자별
-    대표값을 모두 합산, 금일은 오늘 날짜의 대표값만 합산한다. 전년도(25년) 비교치는
-    온열질환 신고 체계가 이번 시즌에 처음 도입돼 시스템 내에 원천 데이터가 없다.
+    구글폼 문항이 "이번주 누적 온열질환 의심 환자 수"(그 주의 최종 누적값, 응답자가 직접
+    합산해서 입력 — 그날 하루의 신규분이 아님)이므로, 같은 지사가 같은 주에 여러 번
+    제출해도 그 주의 마지막 제출값만 그 주의 대표값으로 쓴다 — 전부 더하면 같은 주가
+    중복 합산된다. 연간 누적은 지사·주차별 대표값을 모두 합산, 이번주는 이번 주차의
+    대표값만 합산한다. 전년도(25년) 비교치는 온열질환 신고 체계가 이번 시즌에 처음
+    도입돼 시스템 내에 원천 데이터가 없다.
     """
     raw = load_incident_reports_raw()
     if raw is None or raw.empty:
-        return {"cumulative": 0, "today": 0}
-    now = pd.Timestamp.now()
+        return {"cumulative": 0, "this_week": 0}
+    _, this_week = this_and_last_week()
+    now = now_kst()
     year_rows = raw[raw["timestamp"].dt.year == now.year].copy()
-    year_rows["date"] = year_rows["timestamp"].dt.normalize()
-    daily_last = (
-        year_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
+    year_rows["week"] = year_rows["timestamp"].apply(_week_start)
+    weekly_last = (
+        year_rows.sort_values("timestamp").groupby(["branch", "week"], as_index=False).last()
     )
-    cumulative = int(daily_last["환자수"].sum())
-    today = int(daily_last.loc[daily_last["date"] == now.normalize(), "환자수"].sum())
-    return {"cumulative": cumulative, "today": today}
+    cumulative = int(weekly_last["환자수"].sum())
+    this_week_total = int(weekly_last.loc[weekly_last["week"] == this_week, "환자수"].sum())
+    return {"cumulative": cumulative, "this_week": this_week_total}
+
+
+# 온열질환 예방(폭염 대응) 기간 — 매년 이 날짜로 고정. 시즌 밖 날짜의 제출은 시즌
+# 누적에서 제외한다(예: 관리자가 테스트 삼아 비시즌에 제출한 값이 섞이는 것 방지).
+SEASON_START_MD = (6, 1)
+SEASON_END_MD = (9, 30)
+
+
+def _season_bounds(year: int) -> tuple[pd.Timestamp, pd.Timestamp]:
+    start = pd.Timestamp(year, *SEASON_START_MD)
+    end = pd.Timestamp(year, *SEASON_END_MD, 23, 59, 59)
+    return start, end
+
+
+def stoppage_summary() -> dict:
+    """작업중지 건수: 온열질환 예방 기간(6/1~9/30) 누적, 금일.
+
+    보고 자체는 하루 단위 문항("금일 작업 중지 건수")이지만, 같은 지사가 하루에
+    여러 번 제출해도 그날의 마지막 제출값만 대표값으로 쓴 뒤(patient_summary와 동일
+    원칙, 중복 합산 방지) 시즌 전체 기간의 대표값을 모두 합산해 "시즌 누적"을 만든다
+    — 개별 보고는 그날 하루치만 다루더라도 대시보드에는 시즌 내내 계속 쌓이는
+    형태로 보이게 하기 위함.
+    """
+    raw = load_incident_reports_raw()
+    if raw is None or raw.empty:
+        return {"season_cumulative": 0, "today": 0}
+    now = now_kst()
+    start, end = _season_bounds(now.year)
+    season_rows = raw[(raw["timestamp"] >= start) & (raw["timestamp"] <= end)].copy()
+    if season_rows.empty:
+        return {"season_cumulative": 0, "today": 0}
+    season_rows["date"] = season_rows["timestamp"].dt.normalize()
+    daily_last = (
+        season_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
+    )
+    season_cumulative = int(daily_last["작업중지"].sum())
+    today = int(daily_last.loc[daily_last["date"] == now.normalize(), "작업중지"].sum())
+    return {"season_cumulative": season_cumulative, "today": today}
 
 
 def today_stoppages() -> pd.DataFrame:
@@ -487,12 +541,54 @@ def today_stoppages() -> pd.DataFrame:
     raw = load_incident_reports_raw()
     if raw is None or raw.empty:
         return pd.DataFrame(columns=cols)
-    today = pd.Timestamp.now().normalize()
+    today = now_kst().normalize()
     today_rows = raw[raw["timestamp"].dt.normalize() == today]
     today_rows = today_rows[today_rows["작업중지"] > 0]
     if today_rows.empty:
         return pd.DataFrame(columns=cols)
     return today_rows.groupby("branch", as_index=False).last()[cols]
+
+
+def weekly_incident_totals() -> pd.DataFrame:
+    """지사별 이번주(월요일~오늘) 누적 온열질환·조치 현황.
+
+    환자수/작업조정은 구글폼 문항 자체가 "이번주 누적"(응답자가 직접 합산해서 입력)이라
+    이번주 안에서 가장 최근 제출값 하나만 그 지사의 대표값이다 — 날짜별로 또 합산하면
+    중복 집계가 된다. 반면 작업중지는 문항이 "오늘 신규"이므로 patient_summary() 이전
+    방식과 같이 지사·일자별 마지막 제출값을 그날의 대표값으로 쓴 뒤 이번주 날짜들의
+    대표값을 합산해야 그 주의 총 발생 건수가 된다. 중지상세(자유서술)는 주 단위로
+    합쳐서 보여줄 방법이 마땅치 않아 이 집계에서는 제외한다 — 상세 내용이 필요하면
+    "보고" 링크로 그 지사 폼 응답을 직접 확인한다.
+    """
+    cols = ["branch", "환자수", "작업조정", "작업중지", "최근제출"]
+    cities = load_branch_cities()
+    branches = cities["branch"].unique().tolist() if not cities.empty else []
+    if not branches:
+        return pd.DataFrame(columns=cols)
+    base = pd.DataFrame({"branch": branches, "환자수": 0, "작업조정": 0, "작업중지": 0,
+                          "최근제출": pd.NaT})
+
+    raw = load_incident_reports_raw()
+    if raw is None or raw.empty:
+        return base[cols]
+
+    _, this_week = this_and_last_week()
+    week_rows = raw[raw["timestamp"] >= this_week].copy()
+    if week_rows.empty:
+        return base[cols]
+
+    latest = week_rows.sort_values("timestamp").groupby("branch", as_index=False).last()
+
+    week_rows["date"] = week_rows["timestamp"].dt.normalize()
+    daily_last = week_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
+    stoppage_agg = daily_last.groupby("branch", as_index=False).agg(작업중지=("작업중지", "sum"))
+
+    agg = latest[["branch", "환자수", "작업조정", "timestamp"]].rename(columns={"timestamp": "최근제출"})
+    agg = agg.merge(stoppage_agg, on="branch", how="left")
+    merged = base[["branch"]].merge(agg, on="branch", how="left")
+    for c in ["환자수", "작업조정", "작업중지"]:
+        merged[c] = merged[c].fillna(0).astype(int)
+    return merged[cols]
 
 
 def incident_status() -> pd.DataFrame:

@@ -680,6 +680,12 @@ def weekly_incident_totals() -> pd.DataFrame:
     merged = base[["branch"]].merge(incident_agg, on="branch", how="left")
     merged = merged.merge(stoppage_agg, on="branch", how="left")
     # 최근제출 = 온열질환 조사 폼과 작업중지 즉시 보고 폼 중 그 지사의 더 최근 제출시각.
+    # 두 폼 중 한쪽에 이번주 제출이 하나도 없으면 그 집계(incident_agg/stoppage_agg)가
+    # 빈 DataFrame이라 병합 후 해당 컬럼이 datetime64가 아니라 전부 NaN인 object dtype이
+    # 되고, 이 상태로 다른 쪽(datetime64)과 .max(axis=1)을 하면 TypeError가 난다 —
+    # 두 컬럼 다 명시적으로 datetime64로 맞춘 뒤 합친다.
+    merged["최근제출"] = pd.to_datetime(merged["최근제출"])
+    merged["최근제출_중지"] = pd.to_datetime(merged["최근제출_중지"])
     merged["최근제출"] = merged[["최근제출", "최근제출_중지"]].max(axis=1)
     for c in ["환자수", "작업조정", "작업중지"]:
         merged[c] = merged[c].fillna(0).astype(int)

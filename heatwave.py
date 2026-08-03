@@ -441,23 +441,45 @@ def load_incident_reports_raw() -> pd.DataFrame | None:
             col_map[col] = "작업조정"
         elif "중지" in c and "건" in c:
             col_map[col] = "작업중지"
+        elif "물" in c and ("포도당" in c or "관리" in c):
+            col_map[col] = "물"
+        elif "바람" in c or "그늘" in c:
+            col_map[col] = "바람그늘"
+        elif "휴식" in c:
+            col_map[col] = "휴식"
+        elif "비상대응" in c or ("교육" in c and "물품" in c):
+            col_map[col] = "비상물품교육"
+        elif "민감군" in c:
+            col_map[col] = "민감군"
+        elif "점검" in c and "특이사항" in c:
+            col_map[col] = "점검특이사항"
         elif "상세" in c:
             col_map[col] = "중지상세"
     df = df.rename(columns=col_map)
 
-    needed = {"timestamp", "branch", "환자수", "작업조정", "작업중지"}
+    # 작업중지/중지상세는 별도 폼("작업중지 즉시 보고")으로 분리돼 이 시트에는 더 이상
+    # 새로 쌓이지 않는다 — 과거(분리 이전) 데이터는 남아있을 수 있어 있으면 읽고, 없으면
+    # 0/빈값으로 채워 하위 함수(stoppage_summary 등)가 그대로 동작하게 한다.
+    needed = {"timestamp", "branch", "환자수", "작업조정"}
     if not needed.issubset(df.columns):
         return None
-    if "중지상세" not in df.columns:
-        df["중지상세"] = ""
+    for c in ["작업중지", "물", "바람그늘", "휴식", "비상물품교육", "민감군"]:
+        if c not in df.columns:
+            df[c] = 0 if c == "작업중지" else ""
+    for c in ["중지상세", "점검특이사항"]:
+        if c not in df.columns:
+            df[c] = ""
 
     df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
     df = df.dropna(subset=["branch", "timestamp"])
     if df.empty:
         return df
-    df["중지상세"] = df["중지상세"].fillna("")
+    text_cols = ["중지상세", "물", "바람그늘", "휴식", "비상물품교육", "민감군", "점검특이사항"]
+    for c in text_cols:
+        df[c] = df[c].fillna("")
     return df.sort_values("timestamp")[
-        ["branch", "환자수", "작업조정", "작업중지", "중지상세", "timestamp"]]
+        ["branch", "환자수", "작업조정", "작업중지", "중지상세",
+         "물", "바람그늘", "휴식", "비상물품교육", "민감군", "점검특이사항", "timestamp"]]
 
 
 def load_incident_reports() -> pd.DataFrame | None:
@@ -472,12 +494,13 @@ def load_incident_reports() -> pd.DataFrame | None:
 def patient_summary() -> dict:
     """온열질환 환자수 전사 합계: 26년(올해) 누적, 이번주.
 
-    구글폼 문항이 "이번주 누적 온열질환 의심 환자 수"(그 주의 최종 누적값, 응답자가 직접
-    합산해서 입력 — 그날 하루의 신규분이 아님)이므로, 같은 지사가 같은 주에 여러 번
-    제출해도 그 주의 마지막 제출값만 그 주의 대표값으로 쓴다 — 전부 더하면 같은 주가
-    중복 합산된다. 연간 누적은 지사·주차별 대표값을 모두 합산, 이번주는 이번 주차의
-    대표값만 합산한다. 전년도(25년) 비교치는 온열질환 신고 체계가 이번 시즌에 처음
-    도입돼 시스템 내에 원천 데이터가 없다.
+    구글폼 문항은 "금주 온열질환 의심 신규 환자 수"(응답자가 그때까지 파악한 신규 발생분만
+    입력 — 누적 계산은 응답자가 직접 하지 않음)이므로, 같은 지사가 같은 날 여러 번
+    제출해도 그날의 마지막 제출값만 그날의 대표값으로 쓴 뒤(중복 합산 방지) 나머지는
+    전부 합산으로 집계한다 — 주간·연간 누적 계산은 응답자가 아니라 대시보드(이 함수)가
+    담당한다. 문항마다 집계 기준이 다르면 지사에서 헷갈리므로, 작업조정·작업중지와 동일한
+    원칙을 쓴다. 전년도(25년) 비교치는 온열질환 신고 체계가 이번 시즌에 처음 도입돼
+    시스템 내에 원천 데이터가 없다.
     """
     raw = load_incident_reports_raw()
     if raw is None or raw.empty:
@@ -485,12 +508,12 @@ def patient_summary() -> dict:
     _, this_week = this_and_last_week()
     now = now_kst()
     year_rows = raw[raw["timestamp"].dt.year == now.year].copy()
-    year_rows["week"] = year_rows["timestamp"].apply(_week_start)
-    weekly_last = (
-        year_rows.sort_values("timestamp").groupby(["branch", "week"], as_index=False).last()
+    year_rows["date"] = year_rows["timestamp"].dt.normalize()
+    daily_last = (
+        year_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
     )
-    cumulative = int(weekly_last["환자수"].sum())
-    this_week_total = int(weekly_last.loc[weekly_last["week"] == this_week, "환자수"].sum())
+    cumulative = int(daily_last["환자수"].sum())
+    this_week_total = int(daily_last.loc[daily_last["date"] >= this_week, "환자수"].sum())
     return {"cumulative": cumulative, "this_week": this_week_total}
 
 
@@ -552,13 +575,12 @@ def today_stoppages() -> pd.DataFrame:
 def weekly_incident_totals() -> pd.DataFrame:
     """지사별 이번주(월요일~오늘) 누적 온열질환·조치 현황.
 
-    환자수/작업조정은 구글폼 문항 자체가 "이번주 누적"(응답자가 직접 합산해서 입력)이라
-    이번주 안에서 가장 최근 제출값 하나만 그 지사의 대표값이다 — 날짜별로 또 합산하면
-    중복 집계가 된다. 반면 작업중지는 문항이 "오늘 신규"이므로 patient_summary() 이전
-    방식과 같이 지사·일자별 마지막 제출값을 그날의 대표값으로 쓴 뒤 이번주 날짜들의
-    대표값을 합산해야 그 주의 총 발생 건수가 된다. 중지상세(자유서술)는 주 단위로
-    합쳐서 보여줄 방법이 마땅치 않아 이 집계에서는 제외한다 — 상세 내용이 필요하면
-    "보고" 링크로 그 지사 폼 응답을 직접 확인한다.
+    환자수/작업조정/작업중지 모두 구글폼 문항이 "금주 신규"(응답자는 그때까지 파악한
+    신규분만 입력, 누적 계산은 하지 않음)이므로 지사·일자별 마지막 제출값을 그날의
+    대표값으로 쓴 뒤(하루 중복 제출 방지) 이번주 날짜들의 대표값을 합산해야 그 주의
+    총 발생 건수가 된다 — 응답자가 아니라 이 함수가 주간 누적을 계산한다. 중지상세
+    (자유서술)는 주 단위로 합쳐서 보여줄 방법이 마땅치 않아 이 집계에서는 제외한다 —
+    상세 내용이 필요하면 "보고" 링크로 그 지사 폼 응답을 직접 확인한다.
     """
     cols = ["branch", "환자수", "작업조정", "작업중지", "최근제출"]
     cities = load_branch_cities()
@@ -577,17 +599,57 @@ def weekly_incident_totals() -> pd.DataFrame:
     if week_rows.empty:
         return base[cols]
 
-    latest = week_rows.sort_values("timestamp").groupby("branch", as_index=False).last()
-
     week_rows["date"] = week_rows["timestamp"].dt.normalize()
     daily_last = week_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
-    stoppage_agg = daily_last.groupby("branch", as_index=False).agg(작업중지=("작업중지", "sum"))
-
-    agg = latest[["branch", "환자수", "작업조정", "timestamp"]].rename(columns={"timestamp": "최근제출"})
-    agg = agg.merge(stoppage_agg, on="branch", how="left")
+    agg = daily_last.groupby("branch", as_index=False).agg(
+        환자수=("환자수", "sum"), 작업조정=("작업조정", "sum"), 작업중지=("작업중지", "sum"),
+        최근제출=("timestamp", "max"),
+    )
     merged = base[["branch"]].merge(agg, on="branch", how="left")
     for c in ["환자수", "작업조정", "작업중지"]:
         merged[c] = merged[c].fillna(0).astype(int)
+    return merged[cols]
+
+
+CHECKLIST_FIELDS = ["물", "바람그늘", "휴식", "비상물품교육", "민감군"]
+CHECKLIST_LABELS = {
+    "물": "물", "바람그늘": "바람·그늘", "휴식": "휴식",
+    "비상물품교육": "비상대응물품·교육", "민감군": "민감군",
+}
+
+
+def weekly_checklist() -> pd.DataFrame:
+    """지사별 이번주 온열질환 예방 점검 결과 — 5개 항목 최신 제출값 + 특이사항.
+
+    체크리스트 문항은 "제출 시점 기준 현재 상태"를 묻는 객관식이라(예: 상시 비치·보충
+    정상 / 부족 등) 날짜별로 합산할 수 있는 값이 아니다 — 이번주 안에서 가장 최근
+    제출값만 그 지사의 대표값으로 쓴다.
+    """
+    cols = ["branch", *CHECKLIST_FIELDS, "점검특이사항", "최근제출"]
+    cities = load_branch_cities()
+    branches = cities["branch"].unique().tolist() if not cities.empty else []
+    if not branches:
+        return pd.DataFrame(columns=cols)
+    base = pd.DataFrame({"branch": branches, **{f: "" for f in CHECKLIST_FIELDS},
+                          "점검특이사항": "", "최근제출": pd.NaT})
+
+    raw = load_incident_reports_raw()
+    if raw is None or raw.empty:
+        return base[cols]
+
+    _, this_week = this_and_last_week()
+    week_rows = raw[raw["timestamp"] >= this_week].copy()
+    if week_rows.empty:
+        return base[cols]
+
+    latest = (
+        week_rows.sort_values("timestamp").groupby("branch", as_index=False).last()
+        .rename(columns={"timestamp": "최근제출"})
+    )
+    merged = base[["branch"]].merge(
+        latest[["branch", *CHECKLIST_FIELDS, "점검특이사항", "최근제출"]], on="branch", how="left")
+    for f in CHECKLIST_FIELDS + ["점검특이사항"]:
+        merged[f] = merged[f].fillna("")
     return merged[cols]
 
 

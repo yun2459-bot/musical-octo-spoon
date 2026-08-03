@@ -644,10 +644,9 @@ with tab4:
                     )
 
             with col_kpi:
-                # 왼쪽 지도(높이 615px 고정)와 시각적으로 짝이 맞도록, 오른쪽도 같은 높이의
-                # 카드 하나로 감싼다 — 내용이 지도보다 짧아도 빈 여백만 남기고 뚝 끊기지
-                # 않게, 구분선(divider)으로 세 블록의 리듬을 채운다.
-                with st.container(height=615, border=True):
+                # 고정 높이 컨테이너(height=615)는 내용이 넘칠 때 내부 스크롤이 생겨 오히려
+                # 어색해서, 테두리 카드로만 지도와 짝을 맞추고 높이는 내용에 맡긴다.
+                with st.container(border=True):
                     st.subheader("🔥 현재 최고 체감온도 지사")
                     summary_now = HW.branch_summary(obs)
                     hot = summary_now[summary_now["has_data"]] if not summary_now.empty else summary_now
@@ -679,15 +678,12 @@ with tab4:
                         f'<tr><th style="{th_style}">25년(전년도)</th>'
                         f'<th style="{th_style}">26년(누적)</th>'
                         f'<th style="{th_style}">이번주</th></tr>'
-                        f'<tr><td style="{td_style}">집계 없음</td>'
+                        f'<tr><td style="{td_style}">0명</td>'
                         f'<td style="{td_style}">{psum["cumulative"]}명</td>'
                         f'<td style="{td_style}">{psum["this_week"]}명</td></tr>'
                         '</table>',
                         unsafe_allow_html=True,
                     )
-                    st.caption("25년(전년도) = 온열질환 신고 체계가 이번 시즌 처음 도입돼 원천 데이터 없음. "
-                               "26년(누적) = 올해 지사·주차별 제출값(이번주 누적) 합계. 이번주 = 이번 주차의 "
-                               "최근 제출값(월요일 리셋).")
 
                     st.divider()
                     st.markdown("##### 🚨 작업중지 보고")
@@ -750,11 +746,44 @@ with tab4:
                         "보고": st.column_config.LinkColumn("보고", display_text="📝 보고하기", width="small"),
                     },
                 )
-                st.caption("환자수/작업조정 = 응답자가 매번 직접 입력하는 **이번주 누적**값 중 이번주 최근 "
-                           "제출값. 작업중지 = 매일 신규 건수 문항을 **이번주 날짜별로 합산**. 빨간 행 = "
-                           "이번주 수치가 0보다 큰 지사(맨 위로 정렬). \"최근 제출\" = 이번주 중 그 지사의 "
-                           "마지막 제출 시각. \"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 "
-                           "새 탭에서 열립니다. 작업중지 상세 내용은 \"보고\" 링크로 직접 확인하세요.")
+                st.caption("환자수/작업조정/작업중지 = 매일 신규 건수 문항을 **이번주 날짜별로 합산**(같은 "
+                           "날 여러 번 제출해도 그날 마지막 값만 대표값으로 써서 중복 합산 방지) — 누적 "
+                           "계산은 응답자가 아니라 대시보드가 담당합니다. 빨간 행 = 이번주 수치가 0보다 "
+                           "큰 지사(맨 위로 정렬). \"최근 제출\" = 이번주 중 그 지사의 마지막 제출 시각. "
+                           "\"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 새 탭에서 열립니다. "
+                           "작업중지 상세 내용은 \"보고\" 링크로 직접 확인하세요.")
+
+            st.markdown("---")
+            st.subheader("🧾 주간 온열질환 예방 점검 결과")
+            checklist = HW.weekly_checklist()
+            if not checklist.empty:
+                label_cols = list(HW.CHECKLIST_LABELS.values())
+
+                def _is_issue(v) -> bool:
+                    return "특이사항 기재" in str(v)
+
+                checklist["이슈"] = checklist[HW.CHECKLIST_FIELDS].apply(
+                    lambda row: any(_is_issue(v) for v in row), axis=1)
+                checklist = checklist.sort_values("이슈", ascending=False)
+                display_chk = checklist[
+                    ["branch", *HW.CHECKLIST_FIELDS, "점검특이사항", "최근제출"]
+                ].rename(columns={"branch": "지사", "점검특이사항": "특이사항", **HW.CHECKLIST_LABELS})
+                display_chk["최근제출"] = checklist["최근제출"].apply(
+                    lambda t: t.strftime("%m-%d %H:%M") if pd.notna(t) else "이번주 제출 없음")
+
+                def _highlight_chk(row):
+                    return [
+                        "background-color:#c81d25; color:white" if col in label_cols and _is_issue(row[col]) else ""
+                        for col in row.index
+                    ]
+
+                st.dataframe(
+                    display_chk.style.apply(_highlight_chk, axis=1),
+                    width="stretch", hide_index=True,
+                    column_config={"최근제출": st.column_config.TextColumn("최근 제출")},
+                )
+                st.caption("각 항목 = 이번주 그 지사의 최근 제출값(월요일 리셋). 빨간 칸 = 미흡·부족·신규 "
+                           "발생 등 특이사항이 있는 항목 — \"특이사항\" 컬럼에 상세 내용이 기재됩니다.")
 
             photos = HW.load_photo_reports()
             st.markdown("---")
@@ -840,7 +869,10 @@ with tab4:
             fig_temp.for_each_annotation(
                 lambda a: a.update(text=f"{a.text} ({week_dates.get(a.text, '')}~)") if a.text in week_dates else a)
             fig_temp.update_xaxes(title="")
-            fig_temp.update_yaxes(range=[25, 40])
+            # range만 지정하면 데스크톱에선 문제없지만, 모바일에서 반응형 리사이즈가
+            # 일어날 때 autorange가 다시 켜지면서 막대(바)형 축 특성상 0부터 다시
+            # 그려지는 경우가 있어(확인됨) autorange=False를 명시적으로 고정한다.
+            fig_temp.update_yaxes(range=[25, 40], autorange=False, rangemode="normal")
             st.plotly_chart(fig_temp, width="stretch")
             st.caption("왼쪽 = 지난주, 오른쪽 = 이번주(진행 중). 각 지사·주차의 최고 체감온도만 표시합니다.")
 

@@ -105,15 +105,20 @@ def _print_report_html() -> str:
             rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}<td>{note}</td></tr>")
         section3 = f'<table class="rpt-table small"><tr><th>지사</th>{head_cols}<th>특이사항</th></tr>{"".join(rows3)}</table>'
 
-    if photo_by_branch.empty:
-        page2_body = '<p class="rpt-empty">업로드된 사진 없음</p>'
-    else:
-        cards = "".join(
-            f'<div class="rpt-photo"><img src="{html.escape(p.photo_url)}" />'
-            f'<div class="cap">{html.escape(str(p.branch))} · {p.timestamp.strftime("%m-%d %H:%M")}</div></div>'
-            for p in photo_by_branch.itertuples()
+    # 사진이 없는 지사도 "그 지사엔 아직 없다"는 게 보이도록 빈 칸으로 채워서 전체
+    # 지사를 다 늘어놓는다 — 있는 지사만 나오면 빠진 지사가 안 보여 헷갈린다.
+    photo_map = ({p.branch: p for p in photo_by_branch.itertuples()} if not photo_by_branch.empty else {})
+    cards = "".join(
+        (
+            f'<div class="rpt-photo"><img src="{html.escape(photo_map[b].photo_url)}" />'
+            f'<div class="cap">{html.escape(b)} · {photo_map[b].timestamp.strftime("%m-%d %H:%M")}</div></div>'
+            if b in photo_map else
+            f'<div class="rpt-photo rpt-photo-empty"><div class="rpt-photo-placeholder">사진 없음</div>'
+            f'<div class="cap">{html.escape(b)}</div></div>'
         )
-        page2_body = f'<div class="rpt-photo-grid">{cards}</div>'
+        for b in HW.branch_order()
+    )
+    page2_body = f'<div class="rpt-photo-grid">{cards}</div>'
 
     return f"""
     <div class="rpt-page">
@@ -157,6 +162,9 @@ def _render_print_report_button() -> None:
     .rpt-photo { width: 30%; }
     .rpt-photo img { width: 100%; height: 150px; object-fit: cover; border-radius: 6px; }
     .rpt-photo .cap { font-size: 10.5px; color: #333; margin-top: 3px; }
+    .rpt-photo-placeholder { width: 100%; height: 150px; border-radius: 6px; background: #f2f2f2;
+        border: 1px dashed #bbb; display: flex; align-items: center; justify-content: center;
+        color: #999; font-size: 11px; }
     @page { size: A4; margin: 14mm; }
     """
     full_html = f"<html><head><meta charset='utf-8'><title>주간 온열질환 예방 대응 보고서</title>" \
@@ -165,7 +173,7 @@ def _render_print_report_button() -> None:
     button_html = f"""
     <button id="printReportBtn" style="padding:10px 18px; font-size:14px; font-weight:700;
         border:none; border-radius:8px; background:{SEBANG_ORANGE}; color:white; cursor:pointer; width:100%;">
-      🖨️ 주간 보고서 인쇄 (CSO·임원진 보고용)
+      🖨️ 주간 보고서 인쇄
     </button>
     <script>
     document.getElementById('printReportBtn').onclick = function () {{

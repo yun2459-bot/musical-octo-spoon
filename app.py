@@ -97,9 +97,16 @@ def _print_report_html() -> str:
     else:
         head_cols = "".join(f"<th>{v}</th>" for v in HW.CHECKLIST_LABELS.values())
         rows3 = []
+        def _cell_class(field: str, value: str) -> str:
+            if "특이사항 기재" in value:
+                return "issue"
+            if value.strip() == HW.CHECKLIST_OK[field]:
+                return "ok"
+            return ""
+
         for r in checklist.itertuples():
             cells = "".join(
-                f'<td class="{"issue" if "특이사항 기재" in str(getattr(r, f)) else ""}">'
+                f'<td class="{_cell_class(f, str(getattr(r, f)))}">'
                 f'{html.escape(str(getattr(r, f)) or "-")}</td>'
                 for f in HW.CHECKLIST_FIELDS
             )
@@ -167,6 +174,7 @@ def _render_print_report_button() -> None:
     .rpt-table.small th, .rpt-table.small td { font-size: 10.5px; padding: 3px 5px;
         word-break: keep-all; overflow-wrap: break-word; }
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
+    .rpt-table td.ok { background: #d9f2e3; color: #14532d; }
     .rpt-empty { color: #888; font-size: 12px; }
     .rpt-page { page-break-after: always; }
     .rpt-page:last-child { page-break-after: auto; }
@@ -214,6 +222,10 @@ SEBANG_LIGHT_GRAY_1 = "#E4E4E2"  # Primary: Pantone Cool Gray 2 C
 SEBANG_LIGHT_GRAY_2 = "#A7A9AC"  # Primary: Pantone 429 C
 SEBANG_GREEN = "#009CA6"         # Secondary: Pantone 320 C
 SEBANG_ORANGE = "#EE2737"        # Secondary: Pantone 1788 C
+
+# 점검 결과가 "양호"(정상 응답)인 칸에 칠하는 옅은 초록 — 이슈 강조색(#c81d25)과 달리
+# 글자를 검게 두어, 표를 훑을 때 빨강만 눈에 띄고 초록은 배경으로 물러나게 한다.
+_OK_CELL_STYLE = "background-color:#d9f2e3; color:#14532d"
 
 _FONT_DIR = Path(__file__).parent / "fonts"
 _SEBANG_REGULAR = _FONT_DIR / "SEBANG Gothic.ttf"
@@ -900,6 +912,10 @@ with tab4:
                 def _highlight_issue(row):
                     if row["환자수"] != "0명" or row["작업조정"] != "0건" or row["작업중지"] != "0건":
                         return ["background-color:#c81d25; color:white"] * len(row)
+                    # 전부 0이어도 이번주 제출이 없으면 "확인된 양호"가 아니라 "미확인"이므로
+                    # 초록을 칠하지 않는다 — 미제출 지사가 양호로 보이면 오히려 위험하다.
+                    if row["최근제출"] != "이번주 제출 없음":
+                        return [_OK_CELL_STYLE] * len(row)
                     return [""] * len(row)
 
                 st.dataframe(
@@ -914,7 +930,9 @@ with tab4:
                            "여러 번 제출해도 그날 마지막 값만 대표값으로 써서 중복 합산 방지) — 누적 "
                            "계산은 응답자가 아니라 대시보드가 담당합니다. 작업중지 = 이번주 \"작업중지 "
                            "즉시 보고\" 제출 건수(사건 1건당 1건). 빨간 행 = 이번주 수치가 0보다 큰 지사"
-                           "(맨 위로 정렬). \"최근 제출\" = 두 폼 중 이번주 그 지사의 마지막 제출 시각. "
+                           "(맨 위로 정렬). 초록 행 = 이번주 제출이 있고 전부 0인 지사(양호) — 아직 "
+                           "제출하지 않은 지사는 0이어도 \"확인된 양호\"가 아니라 색을 칠하지 않습니다. "
+                           "\"최근 제출\" = 두 폼 중 이번주 그 지사의 마지막 제출 시각. "
                            "\"보고\" = 클릭하면 그 지사가 선택된 채로 온열질환·예방점검 구글폼이 새 탭에서 "
                            "열립니다. 작업중지 상세 내용은 위 \"🚨 작업조정·중지 보고\" 카드나 인쇄 보고서를 "
                            "확인하세요.")
@@ -938,9 +956,13 @@ with tab4:
                     lambda t: t.strftime("%m-%d %H:%M") if pd.notna(t) else "이번주 제출 없음")
                 display_chk["제출횟수"] = checklist["제출횟수"].map(lambda n: f"{int(n)}회")
 
+                # 표는 컬럼명이 라벨로 바뀐 뒤라, 라벨 기준으로 "양호" 응답을 찾을 수 있게 매핑한다.
+                ok_by_label = {HW.CHECKLIST_LABELS[f]: HW.CHECKLIST_OK[f] for f in HW.CHECKLIST_FIELDS}
+
                 def _highlight_chk(row):
                     return [
                         "background-color:#c81d25; color:white" if col in label_cols and _is_issue(row[col])
+                        else _OK_CELL_STYLE if col in label_cols and str(row[col]).strip() == ok_by_label[col]
                         else "background-color:#fff3cd" if col == "제출횟수" and row[col] not in ("0회", "1회")
                         else ""
                         for col in row.index
@@ -953,6 +975,7 @@ with tab4:
                 )
                 st.caption("각 항목 = 이번주 그 지사의 최근 제출값(월요일 리셋). 빨간 칸 = 미흡·부족·신규 "
                            "발생 등 특이사항이 있는 항목 — \"특이사항\" 컬럼에 상세 내용이 기재됩니다. "
+                           "초록 칸 = 정상(양호) 응답. "
                            "\"제출횟수\"가 2회 이상(노란 칸)이면 이번주 같은 지사에서 여러 번 제출된 것 — "
                            "폼에 응답자 구분 문항이 없어 표에는 가장 최근 제출값만 반영되니, 여러 명이 "
                            "제출했다면 서로 다른 값을 냈는지 지사 내에서 확인이 필요합니다.")

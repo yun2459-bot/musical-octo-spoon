@@ -104,6 +104,32 @@ def _print_report_html() -> str:
         )
         section2 = f'<table class="rpt-table"><tr><th>지사</th><th>제출시각</th><th>상세 이유</th></tr>{rows2}</table>'
 
+    events = HW.weekly_patient_events()
+    if events.empty:
+        section_pt = '<p class="rpt-empty">이번주 온열질환 발생 보고 없음</p>'
+    else:
+        rows_pt = "".join(
+            f"<tr><td>{html.escape(str(r.branch))}</td>"
+            f"<td>{r.timestamp.strftime('%m-%d %H:%M')}</td>"
+            f"<td>{int(r.환자수)}명</td>"
+            f'<td class="{"issue" if "열사병" in str(r.증상) else ""}">'
+            f"{html.escape(str(r.증상) or '-')}</td>"
+            f"<td>{html.escape(str(r.상세) or '(상세 미기재)')}</td></tr>"
+            for r in events.itertuples()
+        )
+        section_pt = ('<table class="rpt-table">'
+                      '<tr><th>지사</th><th>발생시각</th><th>환자 수</th><th>증상 구분</th>'
+                      '<th>발생 경위 · 조치</th></tr>'
+                      f'{rows_pt}</table>')
+        # 주간 자기보고와 숫자가 어긋나는 지사는 보고서에도 남겨, 회의 자리에서 바로
+        # 누락 지사를 확인할 수 있게 한다.
+        mis = HW.patient_report_mismatch()
+        if not mis.empty:
+            _t = ", ".join(f"{r.branch}(즉시 {r.즉시보고}명 / 주간 {r.주간보고}명)"
+                           for r in mis.itertuples())
+            section_pt += (f'<p class="rpt-note">※ 즉시보고와 주간보고 인원이 다른 지사: '
+                           f'{html.escape(_t)} — 누락 여부 확인 필요</p>')
+
     if checklist.empty:
         section3 = '<p class="rpt-empty">점검 데이터 없음</p>'
     else:
@@ -157,11 +183,13 @@ def _print_report_html() -> str:
       {section1}
       <h2>2. 옥외 작업 중지 지사 및 상세 이유</h2>
       {section2}
-      <h2>3. 주간 온열질환 예방 확인 결과 (지사별)</h2>
+      <h2>3. 이번주 온열질환 발생 보고 상세</h2>
+      {section_pt}
+      <h2>4. 주간 온열질환 예방 확인 결과 (지사별)</h2>
       {section3}
     </div>
     <div class="rpt-page">
-      <h2>4. 활동 사진 (지사별 1장)</h2>
+      <h2>5. 활동 사진 (지사별 1장)</h2>
       {page2_body}
     </div>
     """
@@ -188,6 +216,7 @@ def _render_print_report_button() -> None:
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
     .rpt-table td.ok { background: #d9f2e3; color: #14532d; }
     .rpt-empty { color: #888; font-size: 12px; }
+    .rpt-note { color: #900; font-size: 11px; margin: 4px 0 0; }
     .rpt-page { page-break-after: always; }
     .rpt-page:last-child { page-break-after: auto; }
     .rpt-photo-grid { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -681,8 +710,6 @@ with tab4:
                         st.warning(f"⚠️ 즉시보고와 주간보고 환자 수가 다른 지사: {_rows} — 어느 쪽을 "
                                    "누락했는지 해당 지사에 확인이 필요합니다.", icon="⚠️")
                     st.link_button("🏥 온열질환 발생 보고하기", _PATIENT_FORM_URL, width="stretch")
-                    st.caption("표의 숫자 = '온열질환 발생 즉시 보고' 제출 기준(공식 집계). "
-                               "주차별 폼의 '금주 환자 수'는 교차검증용으로만 사용합니다.")
 
                     st.divider()
                     st.markdown("##### 🚨 작업조정·중지 보고")
@@ -697,8 +724,6 @@ with tab4:
                         '</table>',
                         unsafe_allow_html=True,
                     )
-                    st.caption("시즌 누적 = 온열질환 예방 기간(6/1~9/30) 내 지사·일자별 마지막 제출값 합계"
-                               "(보고는 하루 단위지만 집계는 시즌 내내 계속 쌓입니다). 금일 = 오늘 제출분만.")
                     stoppages = HW.today_stoppages()
                     if stoppages.empty:
                         st.info("금일 작업중지·조정 보고 없음")
@@ -812,16 +837,31 @@ with tab4:
             st.link_button("📸 현장 사진 보고하기", _PHOTO_FORM_URL, width="stretch")
             st.caption("사진 업로드 문항이 있어 제출 시 구글 계정 로그인이 필요합니다.")
             if not photos.empty:
+                # 한 지사가 사진 여러 장을 한꺼번에 올리면 제출시각이 모두 같아 목록에서
+                # 서로 구분되지 않는다 — 지사별로 번호를 매겨 캐러셀 캡션과 선택 목록에
+                # 같은 번호를 쓰면, 캐러셀에서 본 사진을 번호로 바로 고를 수 있다.
+                _photo_no = {}
+                for _b, _g in photos.groupby("branch"):
+                    for _i, _u in enumerate(
+                            _g.sort_values("timestamp", ascending=False)["photo_url"].tolist(), start=1):
+                        _photo_no[(_b, _u)] = _i
+
                 # p.branch/p.photo_url은 구글시트 응답(외부 입력)이라 raw HTML(components.html)에
                 # 꽂기 전에 반드시 이스케이프한다 — 폼이 드롭다운이라 지금은 안전해 보여도,
                 # 시트를 직접 수정하거나 필드가 자유서술로 바뀌면 스크립트 삽입 경로가 된다.
                 cards = "".join(
                     f'<div style="flex:0 0 auto; width:220px; scroll-snap-align:start;">'
+                    f'<div style="position:relative;">'
                     f'<img src="{html.escape(p.photo_url)}" style="width:220px; height:220px; object-fit:cover; '
                     f'border-radius:8px; display:block;" />'
+                    f'<div style="position:absolute; top:6px; left:6px; background:rgba(0,0,0,.72); color:white; '
+                    f'font-size:13px; font-weight:700; padding:2px 8px; border-radius:10px;">'
+                    f'{_photo_no.get((p.branch, p.photo_url), 0)}</div></div>'
                     f'<div style="font-size:12px; color:#333; background:rgba(255,255,255,.9); '
                     f'padding:4px 6px; border-radius:0 0 8px 8px;">'
-                    f'{html.escape(str(p.branch))} · {p.timestamp.strftime("%m-%d %H:%M")}</div>'
+                    f'{html.escape(str(p.branch))} '
+                    f'#{_photo_no.get((p.branch, p.photo_url), 0)} · '
+                    f'{p.timestamp.strftime("%m-%d %H:%M")}</div>'
                     f'</div>'
                     for p in photos.itertuples()
                 )
@@ -846,13 +886,17 @@ with tab4:
 
                 # 인쇄 보고서에 넣을 사진을 지사별로 직접 고른다 — 기본값은 최신 사진이라
                 # 그대로 둬도 되고, 보고에 더 적합한 장면이 있으면 바꿀 수 있게 한다.
-                with st.expander("🖨️ 보고서에 넣을 사진 고르기 (기본: 지사별 최신 사진)"):
+                # 확인 버튼을 누르면 Streamlit이 재실행되면서 expander가 다시 접혀 미리보기가
+                # 안 보인다 — 확인 상태에서는 펼친 채로 유지한다.
+                with st.expander("🖨️ 보고서에 넣을 사진 고르기 (기본: 지사별 최신 사진)",
+                                  expanded=bool(st.session_state.get("_photo_pick_confirmed"))):
                     picks = dict(st.session_state.get("_report_photo_pick", {}))
                     changed = False
                     for _b in [b for b in HW.branch_order() if b in set(photos["branch"])]:
                         _bp = photos[photos["branch"] == _b].sort_values("timestamp", ascending=False)
                         _labels = ["최신 사진 (기본)"] + [
-                            f'{r.timestamp.strftime("%m-%d %H:%M")}' for r in _bp.itertuples()]
+                            f'#{_photo_no.get((_b, r.photo_url), 0)} · {r.timestamp.strftime("%m-%d %H:%M")}'
+                            for r in _bp.itertuples()]
                         _urls = [None] + _bp["photo_url"].tolist()
                         _cur = picks.get(_b)
                         _idx = _urls.index(_cur) if _cur in _urls else 0
@@ -867,7 +911,29 @@ with tab4:
                                 picks[_b] = _new
                     if changed:
                         st.session_state["_report_photo_pick"] = picks
-                    st.caption("고른 사진은 위 \"🖨️ 주간 보고서 인쇄\" 버튼으로 뽑는 보고서에 반영됩니다. "
+
+                    # 고른 사진이 실제로 반영됐는지 눈으로 확인할 수 있게, 확인 버튼을 누르면
+                    # 보고서에 들어갈 사진을 지사별로 미리 보여준다(선택 안 한 지사는 최신 사진).
+                    if st.button("✅ 선택 확인 (보고서에 들어갈 사진 미리보기)", width="stretch"):
+                        st.session_state["_photo_pick_confirmed"] = True
+                    if st.session_state.get("_photo_pick_confirmed"):
+                        _picked = st.session_state.get("_report_photo_pick", {})
+                        _branches = [b for b in HW.branch_order() if b in set(photos["branch"])]
+                        st.success(f"보고서에 들어갈 사진 {len(_branches)}개 지사 — "
+                                   f"직접 고른 지사 {len(_picked)}곳, 나머지는 최신 사진입니다.")
+                        for _row in [_branches[i:i + 4] for i in range(0, len(_branches), 4)]:
+                            for _col, _b in zip(st.columns(4), _row):
+                                _bp = photos[photos["branch"] == _b].sort_values(
+                                    "timestamp", ascending=False)
+                                _u = _picked.get(_b) or _bp.iloc[0]["photo_url"]
+                                _n = _photo_no.get((_b, _u), 0)
+                                _manual = _b in _picked
+                                with _col:
+                                    st.image(_u, width="stretch")
+                                    st.caption(f'{_b} #{_n} · {"직접 선택" if _manual else "최신(기본)"}')
+                    st.caption("목록의 번호(#1, #2…)는 위 사진 왼쪽 위에 붙은 번호와 같습니다 — 같은 시각에 "
+                               "여러 장을 올렸어도 번호로 구분해 고를 수 있습니다. "
+                               "고른 사진은 위 \"🖨️ 주간 보고서 인쇄\" 버튼으로 뽑는 보고서에 반영됩니다. "
                                "선택은 이 브라우저 세션에서만 유지되며, 새로고침하면 최신 사진으로 돌아갑니다.")
             else:
                 st.info("아직 업로드된 사진이 없습니다.")

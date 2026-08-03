@@ -66,7 +66,9 @@ def _print_report_html() -> str:
         photos.sort_values("timestamp", ascending=False).drop_duplicates(subset="branch")
         if not photos.empty else photos
     )
-    today_label = HW.now_kst().strftime("%Y-%m-%d")
+    _, this_week = HW.this_and_last_week()
+    week_end = this_week + pd.Timedelta(days=4)  # 월~금 근무 주간 기준
+    period_label = f"{this_week.month}월 {this_week.day}일 ~ {week_end.month}월 {week_end.day}일"
 
     top_line = (f"{week_top['branch']} · {week_top['apparent_temp']:.1f}℃" if week_top is not None
                 else "관측 데이터 없음")
@@ -123,7 +125,7 @@ def _print_report_html() -> str:
     return f"""
     <div class="rpt-page">
       <h1>주간 온열질환 예방 대응 보고서</h1>
-      <div class="rpt-date">기준일: {today_label}</div>
+      <div class="rpt-date">기준기간: {period_label}</div>
       <h2>1. 전체 현황</h2>
       {section1}
       <h2>2. 옥외 작업 중지 지사 및 상세 이유</h2>

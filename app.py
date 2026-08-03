@@ -797,12 +797,11 @@ with tab4:
 
                     latest_obs = obs["observed_at"].max() if not obs.empty else None
                     st.caption(
-                        "📡 출처: 기상청 API허브 방재기상관측(AWS) 매분자료"
-                        + (f" · 최신 관측 {latest_obs.strftime('%m-%d %H:%M')} 기준"
+                        "출처 : 기상청 API 허브 자료"
+                        + (f" · 최신 관측 시간 : {latest_obs.strftime('%m-%d %H:%M')} 기준"
                            if pd.notna(latest_obs) else " · 관측 데이터 없음")
-                        + " · 체감온도는 기상청 여름철 체감온도 공식으로 산출한 추정치이며, 실측 WBGT가 "
-                          "아니라 백엽상 기준값이라 아스팔트·컨테이너 복사열이 심한 현장의 실제 체감과 "
-                          "다를 수 있습니다."
+                        + " · 체감온도는 기상청 여름철 체감온도 공식으로 산출한 추정치이며, "
+                          "사업장의 실측 온도와 상이할 수 있습니다."
                     )
 
             with col_kpi:

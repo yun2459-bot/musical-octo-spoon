@@ -163,17 +163,29 @@ def _print_report_html() -> str:
     # 사진이 없는 지사도 "그 지사엔 아직 없다"는 게 보이도록 빈 칸으로 채워서 전체
     # 지사를 다 늘어놓는다 — 있는 지사만 나오면 빠진 지사가 안 보여 헷갈린다.
     photo_map = ({p.branch: p for p in photo_by_branch.itertuples()} if not photo_by_branch.empty else {})
-    cards = "".join(
-        (
-            f'<div class="rpt-photo"><img src="{html.escape(photo_map[b].photo_url)}" />'
-            f'<div class="cap">{html.escape(b)} · {photo_map[b].timestamp.strftime("%m-%d %H:%M")}</div></div>'
-            if b in photo_map else
-            f'<div class="rpt-photo rpt-photo-empty"><div class="rpt-photo-placeholder">사진 없음</div>'
-            f'<div class="cap">{html.escape(b)}</div></div>'
-        )
-        for b in HW.branch_order()
+
+    def _photo_card(b: str) -> str:
+        if b in photo_map:
+            return (f'<div class="rpt-photo">'
+                    f'<img src="{html.escape(photo_map[b].photo_url)}" />'
+                    f'<div class="cap">{html.escape(b)} · '
+                    f'{photo_map[b].timestamp.strftime("%m-%d %H:%M")}</div></div>')
+        return (f'<div class="rpt-photo rpt-photo-empty">'
+                f'<div class="rpt-photo-placeholder">사진 없음</div>'
+                f'<div class="cap">{html.escape(b)}</div></div>')
+
+    # 한 장을 최대한 크게 뽑기 위해 A4 한 면에 2열 x 3행(6장)씩 나눠 담는다 —
+    # 지사 12곳이면 사진 페이지가 2장이 된다.
+    _all = HW.branch_order()
+    _chunks = [_all[i:i + 6] for i in range(0, len(_all), 6)] or [[]]
+    photo_pages = "".join(
+        f'<div class="rpt-page">'
+        f'<h2>5. 활동 사진 (지사별 1장)'
+        f'{f" — {i}/{len(_chunks)}" if len(_chunks) > 1 else ""}</h2>'
+        f'<div class="rpt-photo-grid">{"".join(_photo_card(b) for b in chunk)}</div>'
+        f'</div>'
+        for i, chunk in enumerate(_chunks, start=1)
     )
-    page2_body = f'<div class="rpt-photo-grid">{cards}</div>'
 
     return f"""
     <div class="rpt-page">
@@ -188,10 +200,7 @@ def _print_report_html() -> str:
       <h2>4. 주간 온열질환 예방 확인 결과 (지사별)</h2>
       {section3}
     </div>
-    <div class="rpt-page">
-      <h2>5. 활동 사진 (지사별 1장)</h2>
-      {page2_body}
-    </div>
+    {photo_pages}
     """
 
 
@@ -219,13 +228,15 @@ def _render_print_report_button() -> None:
     .rpt-note { color: #900; font-size: 11px; margin: 4px 0 0; }
     .rpt-page { page-break-after: always; }
     .rpt-page:last-child { page-break-after: auto; }
-    .rpt-photo-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-    .rpt-photo { width: 30%; }
-    .rpt-photo img { width: 100%; height: 150px; object-fit: cover; border-radius: 6px; }
-    .rpt-photo .cap { font-size: 10.5px; color: #333; margin-top: 3px; }
-    .rpt-photo-placeholder { width: 100%; height: 150px; border-radius: 6px; background: #f2f2f2;
-        border: 1px dashed #bbb; display: flex; align-items: center; justify-content: center;
-        color: #999; font-size: 11px; }
+    /* 한 면(A4, 여백 14mm)에 2열x3행 = 6칸을 꽉 채워 사진을 최대한 크게 뽑는다. */
+    .rpt-photo-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: repeat(3, 1fr);
+        gap: 8mm; height: 235mm; }
+    .rpt-photo { display: flex; flex-direction: column; min-height: 0; }
+    .rpt-photo img { width: 100%; flex: 1 1 auto; min-height: 0; object-fit: cover; border-radius: 6px; }
+    .rpt-photo .cap { font-size: 11px; color: #333; margin-top: 4px; flex: 0 0 auto; }
+    .rpt-photo-placeholder { width: 100%; flex: 1 1 auto; min-height: 0; border-radius: 6px;
+        background: #f2f2f2; border: 1px dashed #bbb; display: flex; align-items: center;
+        justify-content: center; color: #999; font-size: 12px; }
     @page { size: A4; margin: 14mm; }
     """
     full_html = f"<html><head><meta charset='utf-8'><title>주간 온열질환 예방 대응 보고서</title>" \

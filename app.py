@@ -36,9 +36,148 @@ _FORM_BASE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSe8QFLQbs3KwCUVMqHFv-
 # 끌 수 없는 제약 — 사내 구글 계정으로 로그인하면 정상 제출됨).
 _PHOTO_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd4IeOzIzwZTfTuEv5JT0nr8eDBNrNZMs_EwXRisyayhhj66Q/viewform"
 
+# 작업중지 즉시 보고 전용 구글폼(별도 폼, HW.STOPPAGE_SHEET_CSV_URL이 읽는 그 폼) 제출 링크.
+_STOPPAGE_FORM_URL = "https://docs.google.com/forms/d/1pk8mc8krfbTuocYAO0MZW1peD5z8K288aRjl1XKXR6c/viewform"
+
 
 def _branch_form_url(branch: str) -> str:
     return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
+
+
+def _print_report_html() -> str:
+    """주간 CSO·임원진 보고용 인쇄 리포트 본문 HTML.
+
+    2페이지 구성 — 1p: 전체 현황 / 옥외 작업 중지 지사·상세 이유 / 주간 예방 점검
+    결과(지사별), 2p: 지사별 활동 사진 1장씩. CSS의 page-break로 페이지를 나눈다.
+    """
+    psum = HW.patient_summary()
+    obs = HW.load_observations()
+    wmax = HW.weekly_max_by_branch(obs) if not obs.empty else pd.DataFrame()
+    week_top = None
+    if not wmax.empty:
+        wk = wmax[(wmax["주차"] == "이번주") & wmax["apparent_temp"].notna()]
+        if not wk.empty:
+            week_top = wk.loc[wk["apparent_temp"].idxmax()]
+
+    stoppages = HW.weekly_stoppage_reports()
+    checklist = HW.weekly_checklist()
+    photos = HW.load_photo_reports()
+    photo_by_branch = (
+        photos.sort_values("timestamp", ascending=False).drop_duplicates(subset="branch")
+        if not photos.empty else photos
+    )
+    today_label = HW.now_kst().strftime("%Y-%m-%d")
+
+    top_line = (f"{week_top['branch']} · {week_top['apparent_temp']:.1f}℃" if week_top is not None
+                else "관측 데이터 없음")
+    section1 = f"""
+    <table class="rpt-table">
+      <tr><th>누적 온열질환 발생 인원</th><td>{psum['cumulative']}명</td></tr>
+      <tr><th>주간 최고 온도 사업장</th><td>{html.escape(top_line)}</td></tr>
+      <tr><th>이번주 옥외 작업 중지</th><td>{len(stoppages)}건</td></tr>
+    </table>
+    """
+
+    stop_only = stoppages[stoppages["구분"].str.contains("중지", na=False)] if not stoppages.empty else stoppages
+    if stop_only.empty:
+        section2 = '<p class="rpt-empty">이번주 작업중지 보고 없음</p>'
+    else:
+        rows2 = "".join(
+            f"<tr><td>{html.escape(str(r.branch))}</td>"
+            f"<td>{r.timestamp.strftime('%m-%d %H:%M')}</td>"
+            f"<td>{html.escape(str(r.상세) or '(상세 미기재)')}</td></tr>"
+            for r in stop_only.itertuples()
+        )
+        section2 = f'<table class="rpt-table"><tr><th>지사</th><th>제출시각</th><th>상세 이유</th></tr>{rows2}</table>'
+
+    if checklist.empty:
+        section3 = '<p class="rpt-empty">점검 데이터 없음</p>'
+    else:
+        head_cols = "".join(f"<th>{v}</th>" for v in HW.CHECKLIST_LABELS.values())
+        rows3 = []
+        for r in checklist.itertuples():
+            cells = "".join(
+                f'<td class="{"issue" if "특이사항 기재" in str(getattr(r, f)) else ""}">'
+                f'{html.escape(str(getattr(r, f)) or "-")}</td>'
+                for f in HW.CHECKLIST_FIELDS
+            )
+            note = html.escape(str(r.점검특이사항) or "")
+            rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}<td>{note}</td></tr>")
+        section3 = f'<table class="rpt-table small"><tr><th>지사</th>{head_cols}<th>특이사항</th></tr>{"".join(rows3)}</table>'
+
+    if photo_by_branch.empty:
+        page2_body = '<p class="rpt-empty">업로드된 사진 없음</p>'
+    else:
+        cards = "".join(
+            f'<div class="rpt-photo"><img src="{html.escape(p.photo_url)}" />'
+            f'<div class="cap">{html.escape(str(p.branch))} · {p.timestamp.strftime("%m-%d %H:%M")}</div></div>'
+            for p in photo_by_branch.itertuples()
+        )
+        page2_body = f'<div class="rpt-photo-grid">{cards}</div>'
+
+    return f"""
+    <div class="rpt-page">
+      <h1>주간 온열질환 예방 대응 보고서</h1>
+      <div class="rpt-date">기준일: {today_label}</div>
+      <h2>1. 전체 현황</h2>
+      {section1}
+      <h2>2. 옥외 작업 중지 지사 및 상세 이유</h2>
+      {section2}
+      <h2>3. 주간 온열질환 예방 확인 결과 (지사별)</h2>
+      {section3}
+    </div>
+    <div class="rpt-page">
+      <h2>4. 활동 사진 (지사별 1장)</h2>
+      {page2_body}
+    </div>
+    """
+
+
+def _render_print_report_button() -> None:
+    """새 창을 열어 인쇄 전용 HTML을 그린 뒤 브라우저 인쇄 대화상자를 띄우는 버튼.
+
+    components.html은 iframe 안에서 렌더링되므로 그 안에서 window.print()를 부르면
+    iframe 자신만 인쇄하려 들어 브라우저마다 동작이 들쭉날쭉하다 — 대신 새 창을 열어
+    독립된 문서로 print()를 호출하면 항상 그 문서 하나만 인쇄된다.
+    """
+    css = """
+    body { font-family: 'Malgun Gothic', 'SEBANG Gothic', sans-serif; color: #111; margin: 20px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .rpt-date { color: #666; font-size: 12px; margin-bottom: 14px; }
+    h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 2px solid #333; padding-bottom: 4px; }
+    .rpt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+    .rpt-table th, .rpt-table td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; }
+    .rpt-table th { background: #eee; }
+    .rpt-table.small th, .rpt-table.small td { font-size: 10.5px; padding: 3px 5px; }
+    .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
+    .rpt-empty { color: #888; font-size: 12px; }
+    .rpt-page { page-break-after: always; }
+    .rpt-page:last-child { page-break-after: auto; }
+    .rpt-photo-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    .rpt-photo { width: 30%; }
+    .rpt-photo img { width: 100%; height: 150px; object-fit: cover; border-radius: 6px; }
+    .rpt-photo .cap { font-size: 10.5px; color: #333; margin-top: 3px; }
+    @page { size: A4; margin: 14mm; }
+    """
+    full_html = f"<html><head><meta charset='utf-8'><title>주간 온열질환 예방 대응 보고서</title>" \
+                f"<style>{css}</style></head><body>{_print_report_html()}</body></html>"
+    doc_js = json.dumps(full_html).replace("</", "<\\/")
+    button_html = f"""
+    <button id="printReportBtn" style="padding:10px 18px; font-size:14px; font-weight:700;
+        border:none; border-radius:8px; background:{SEBANG_ORANGE}; color:white; cursor:pointer; width:100%;">
+      🖨️ 주간 보고서 인쇄 (CSO·임원진 보고용)
+    </button>
+    <script>
+    document.getElementById('printReportBtn').onclick = function () {{
+        var w = window.open('', '_blank');
+        w.document.open();
+        w.document.write({doc_js});
+        w.document.close();
+        setTimeout(function () {{ w.focus(); w.print(); }}, 350);
+    }};
+    </script>
+    """
+    components.html(button_html, height=54)
 
 
 # ------------------------------------------------------------------ 기본 설정
@@ -472,6 +611,9 @@ with tab4:
         if obs.empty:
             st.info("아직 쌓인 관측 데이터가 없습니다. 스케줄러가 최소 1회 이상 실행된 뒤 다시 확인해주세요.")
         else:
+            _render_print_report_button()
+            st.markdown("---")
+
             clusters = HW.map_clusters(obs)
 
             col_map, col_kpi = st.columns([3, 2])
@@ -686,7 +828,7 @@ with tab4:
                     )
 
                     st.divider()
-                    st.markdown("##### 🚨 작업중지 보고")
+                    st.markdown("##### 🚨 작업조정·중지 보고")
                     ssum = HW.stoppage_summary()
                     st.markdown(
                         '<table style="width:100%; border-collapse:collapse; text-align:center; '
@@ -702,15 +844,18 @@ with tab4:
                                "(보고는 하루 단위지만 집계는 시즌 내내 계속 쌓입니다). 금일 = 오늘 제출분만.")
                     stoppages = HW.today_stoppages()
                     if stoppages.empty:
-                        st.info("금일 작업중지 보고 없음")
+                        st.info("금일 작업중지·조정 보고 없음")
                     else:
+                        # "작업 조정·중지 즉시 보고"는 사건 1건당 1행이라, 오늘 같은 지사가
+                        # 여러 건 제출했으면 대표값 하나로 접지 않고 건마다 카드를 그대로 보여준다.
                         for row in stoppages.itertuples():
-                            # 중지상세는 구글폼 자유서술 입력이라, 마크다운 문법(링크 등)이 그대로
-                            # 해석되지 않도록 본문(st.error)과 분리해 일반 텍스트로만 표시한다.
-                            detail = row.중지상세 or "(상세 미기재)"
-                            st.error(f"**{row.branch}** 작업중지 {int(row.작업중지)}건")
+                            # 상세는 구글폼 자유서술/선택형 입력이라, 마크다운 문법(링크 등)이
+                            # 그대로 해석되지 않도록 본문(st.error)과 분리해 일반 텍스트로만 표시한다.
+                            detail = row.상세 or "(상세 미기재)"
+                            icon = "🚨" if "중지" in row.구분 else "🟡"
+                            st.error(f"**{row.branch}** {icon} {row.구분} · {row.timestamp.strftime('%H:%M')}")
                             st.text(detail)
-                    st.link_button("🚨 지금 작업중지 보고하기", _FORM_BASE_URL, width="stretch")
+                    st.link_button("🚨 지금 작업조정·중지 보고하기", _STOPPAGE_FORM_URL, width="stretch")
 
             st.markdown("---")
             st.subheader("📅 주차별 온열질환 대응 현황")
@@ -746,12 +891,14 @@ with tab4:
                         "보고": st.column_config.LinkColumn("보고", display_text="📝 보고하기", width="small"),
                     },
                 )
-                st.caption("환자수/작업조정/작업중지 = 매일 신규 건수 문항을 **이번주 날짜별로 합산**(같은 "
-                           "날 여러 번 제출해도 그날 마지막 값만 대표값으로 써서 중복 합산 방지) — 누적 "
-                           "계산은 응답자가 아니라 대시보드가 담당합니다. 빨간 행 = 이번주 수치가 0보다 "
-                           "큰 지사(맨 위로 정렬). \"최근 제출\" = 이번주 중 그 지사의 마지막 제출 시각. "
-                           "\"보고\" = 클릭하면 그 지사가 선택된 채로 조치 현황 구글폼이 새 탭에서 열립니다. "
-                           "작업중지 상세 내용은 \"보고\" 링크로 직접 확인하세요.")
+                st.caption("환자수/작업조정 = 매일 신규 건수 문항을 **이번주 날짜별로 합산**(같은 날 "
+                           "여러 번 제출해도 그날 마지막 값만 대표값으로 써서 중복 합산 방지) — 누적 "
+                           "계산은 응답자가 아니라 대시보드가 담당합니다. 작업중지 = 이번주 \"작업중지 "
+                           "즉시 보고\" 제출 건수(사건 1건당 1건). 빨간 행 = 이번주 수치가 0보다 큰 지사"
+                           "(맨 위로 정렬). \"최근 제출\" = 두 폼 중 이번주 그 지사의 마지막 제출 시각. "
+                           "\"보고\" = 클릭하면 그 지사가 선택된 채로 온열질환·예방점검 구글폼이 새 탭에서 "
+                           "열립니다. 작업중지 상세 내용은 위 \"🚨 작업조정·중지 보고\" 카드나 인쇄 보고서를 "
+                           "확인하세요.")
 
             st.markdown("---")
             st.subheader("🧾 주간 온열질환 예방 점검 결과")
@@ -766,14 +913,17 @@ with tab4:
                     lambda row: any(_is_issue(v) for v in row), axis=1)
                 checklist = checklist.sort_values("이슈", ascending=False)
                 display_chk = checklist[
-                    ["branch", *HW.CHECKLIST_FIELDS, "점검특이사항", "최근제출"]
+                    ["branch", *HW.CHECKLIST_FIELDS, "점검특이사항", "최근제출", "제출횟수"]
                 ].rename(columns={"branch": "지사", "점검특이사항": "특이사항", **HW.CHECKLIST_LABELS})
                 display_chk["최근제출"] = checklist["최근제출"].apply(
                     lambda t: t.strftime("%m-%d %H:%M") if pd.notna(t) else "이번주 제출 없음")
+                display_chk["제출횟수"] = checklist["제출횟수"].map(lambda n: f"{int(n)}회")
 
                 def _highlight_chk(row):
                     return [
-                        "background-color:#c81d25; color:white" if col in label_cols and _is_issue(row[col]) else ""
+                        "background-color:#c81d25; color:white" if col in label_cols and _is_issue(row[col])
+                        else "background-color:#fff3cd" if col == "제출횟수" and row[col] not in ("0회", "1회")
+                        else ""
                         for col in row.index
                     ]
 
@@ -783,7 +933,10 @@ with tab4:
                     column_config={"최근제출": st.column_config.TextColumn("최근 제출")},
                 )
                 st.caption("각 항목 = 이번주 그 지사의 최근 제출값(월요일 리셋). 빨간 칸 = 미흡·부족·신규 "
-                           "발생 등 특이사항이 있는 항목 — \"특이사항\" 컬럼에 상세 내용이 기재됩니다.")
+                           "발생 등 특이사항이 있는 항목 — \"특이사항\" 컬럼에 상세 내용이 기재됩니다. "
+                           "\"제출횟수\"가 2회 이상(노란 칸)이면 이번주 같은 지사에서 여러 번 제출된 것 — "
+                           "폼에 응답자 구분 문항이 없어 표에는 가장 최근 제출값만 반영되니, 여러 명이 "
+                           "제출했다면 서로 다른 값을 냈는지 지사 내에서 확인이 필요합니다.")
 
             photos = HW.load_photo_reports()
             st.markdown("---")

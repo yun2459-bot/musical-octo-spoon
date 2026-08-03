@@ -49,6 +49,14 @@ PHOTO_SHEET_CSV_URL = (
     "pub?gid=1033239324&single=true&output=csv"
 )
 
+# 작업중지 즉시 보고 전용 구글폼(별도 폼, GOOGLE_SHEET_CSV_URL과 분리) 응답 시트를
+# "파일 > 공유 > 웹에 게시"로 발행한 CSV 링크. 채워지기 전까지는 관련 집계가 전부
+# 0/빈값으로 폴백한다(호출부가 None 체크로 안전하게 처리).
+STOPPAGE_SHEET_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMezEV5mVSNLvKezk0vs1IOfnNN_SU4hiG2wiXRu685-j0ZOVBT1mpz7oWXfdPoEiHGmsLNbL6HCo7/"
+    "pub?gid=473275652&single=true&output=csv"
+)
+
 LEVEL_ORDER = ["주의", "경고", "위험"]
 LEVEL_COLOR = {"주의": "#f4d35e", "경고": "#f2a154", "위험": "#c81d25"}
 NORMAL_COLOR = "#6fb56f"
@@ -529,58 +537,114 @@ def _season_bounds(year: int) -> tuple[pd.Timestamp, pd.Timestamp]:
     return start, end
 
 
-def stoppage_summary() -> dict:
-    """작업중지 건수: 온열질환 예방 기간(6/1~9/30) 누적, 금일.
+@st.cache_data(ttl=300)
+def load_stoppage_reports_raw() -> pd.DataFrame | None:
+    """작업 조정·중지 즉시 보고 폼(별도 폼) 응답 시트를 읽어 제출행 전부 반환.
 
-    보고 자체는 하루 단위 문항("금일 작업 중지 건수")이지만, 같은 지사가 하루에
-    여러 번 제출해도 그날의 마지막 제출값만 대표값으로 쓴 뒤(patient_summary와 동일
-    원칙, 중복 합산 방지) 시즌 전체 기간의 대표값을 모두 합산해 "시즌 누적"을 만든다
-    — 개별 보고는 그날 하루치만 다루더라도 대시보드에는 시즌 내내 계속 쌓이는
-    형태로 보이게 하기 위함.
+    이 폼은 사건 1건당 1회 즉시 제출이 원칙이라 건수 문항이 없다 — "건수"는 그냥
+    이 함수가 반환하는 행(row) 개수다. 폼이 "작업 조정/작업 중지" 중 하나를 고르고
+    그에 맞는 상세 문항(조정 분류 / 중지 상세)만 응답받는 구조라, 여기서 "구분"·
+    "상세" 두 컬럼으로 통일해 반환한다. URL 미설정이거나 조회 실패, 필요한 컬럼이
+    없으면 None을 반환해 호출부가 0/빈값으로 폴백하게 한다.
     """
-    raw = load_incident_reports_raw()
+    if not STOPPAGE_SHEET_CSV_URL:
+        return None
+    try:
+        df = pd.read_csv(STOPPAGE_SHEET_CSV_URL)
+    except Exception:
+        return None
+
+    col_map = {}
+    for col in df.columns:
+        c = str(col)
+        if "타임스탬프" in c or "timestamp" in c.lower():
+            col_map[col] = "timestamp"
+        elif c.strip() == "지사":
+            col_map[col] = "branch"
+        elif "선택" in c and ("조정" in c or "중지" in c):
+            col_map[col] = "구분"
+        elif "조정" in c and "분류" in c:
+            col_map[col] = "조정분류"
+        elif "중지" in c and "상세" in c:
+            col_map[col] = "중지상세"
+    df = df.rename(columns=col_map)
+
+    if not {"timestamp", "branch"}.issubset(df.columns):
+        return None
+    for c in ["구분", "조정분류", "중지상세"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
+    df = df.dropna(subset=["branch", "timestamp"])
+    if df.empty:
+        return df
+    for c in ["구분", "조정분류", "중지상세"]:
+        df[c] = df[c].fillna("")
+    df["구분"] = df["구분"].apply(lambda v: str(v).strip())
+    df["상세"] = df.apply(
+        lambda r: r["중지상세"] if "중지" in r["구분"] else r["조정분류"], axis=1)
+    return df.sort_values("timestamp")[["branch", "구분", "상세", "timestamp"]]
+
+
+def stoppage_summary() -> dict:
+    """작업중지 보고 건수: 온열질환 예방 기간(6/1~9/30) 누적, 금일.
+
+    "작업 조정·중지 즉시 보고" 폼은 조정/중지 두 종류를 함께 받지만, 이 카드는
+    옥외 작업 "중지"만 센다 — 사건 1건당 1회 제출이므로 건수 = 그 구분의 제출
+    행 개수다(하루에 여러 건 발생하면 그만큼 여러 번 제출 — 중복 제거하지 않는다).
+    """
+    raw = load_stoppage_reports_raw()
     if raw is None or raw.empty:
         return {"season_cumulative": 0, "today": 0}
+    stop_only = raw[raw["구분"].str.contains("중지", na=False)]
     now = now_kst()
     start, end = _season_bounds(now.year)
-    season_rows = raw[(raw["timestamp"] >= start) & (raw["timestamp"] <= end)].copy()
-    if season_rows.empty:
-        return {"season_cumulative": 0, "today": 0}
-    season_rows["date"] = season_rows["timestamp"].dt.normalize()
-    daily_last = (
-        season_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
-    )
-    season_cumulative = int(daily_last["작업중지"].sum())
-    today = int(daily_last.loc[daily_last["date"] == now.normalize(), "작업중지"].sum())
-    return {"season_cumulative": season_cumulative, "today": today}
+    season_rows = stop_only[(stop_only["timestamp"] >= start) & (stop_only["timestamp"] <= end)]
+    today_rows = season_rows[season_rows["timestamp"].dt.normalize() == now.normalize()]
+    return {"season_cumulative": len(season_rows), "today": len(today_rows)}
 
 
 def today_stoppages() -> pd.DataFrame:
-    """금일 제출분 중 작업중지가 있는 지사만 반환 — 없으면 빈 DataFrame.
+    """금일 제출된 작업 조정·중지 즉시 보고 전체(두 구분 모두) — 없으면 빈 DataFrame.
 
-    전일 이전 제출은 절대 이월하지 않는다(하루 단위로 리셋되는 알림 카드용).
+    사건 1건당 1행이라 같은 지사가 오늘 여러 건 제출했으면 여러 행 그대로 보여준다
+    (patient_summary류와 달리 "그날의 대표값 하나"로 접지 않는다).
     """
-    cols = ["branch", "작업중지", "중지상세", "timestamp"]
-    raw = load_incident_reports_raw()
+    cols = ["branch", "구분", "상세", "timestamp"]
+    raw = load_stoppage_reports_raw()
     if raw is None or raw.empty:
         return pd.DataFrame(columns=cols)
     today = now_kst().normalize()
     today_rows = raw[raw["timestamp"].dt.normalize() == today]
-    today_rows = today_rows[today_rows["작업중지"] > 0]
-    if today_rows.empty:
+    return today_rows[cols]
+
+
+def weekly_stoppage_reports() -> pd.DataFrame:
+    """이번주(월요일~오늘) 제출된 작업 조정·중지 즉시 보고 전체(두 구분 모두) — 최신순.
+
+    인쇄용 주간 보고서에서 쓴다 — "옥외 작업 중지" 절은 구분이 "작업 중지"인 행만
+    걸러서 사용한다.
+    """
+    cols = ["branch", "구분", "상세", "timestamp"]
+    raw = load_stoppage_reports_raw()
+    if raw is None or raw.empty:
         return pd.DataFrame(columns=cols)
-    return today_rows.groupby("branch", as_index=False).last()[cols]
+    _, this_week = this_and_last_week()
+    week_rows = raw[raw["timestamp"] >= this_week]
+    return week_rows[cols].sort_values("timestamp", ascending=False)
 
 
 def weekly_incident_totals() -> pd.DataFrame:
     """지사별 이번주(월요일~오늘) 누적 온열질환·조치 현황.
 
-    환자수/작업조정/작업중지 모두 구글폼 문항이 "금주 신규"(응답자는 그때까지 파악한
-    신규분만 입력, 누적 계산은 하지 않음)이므로 지사·일자별 마지막 제출값을 그날의
-    대표값으로 쓴 뒤(하루 중복 제출 방지) 이번주 날짜들의 대표값을 합산해야 그 주의
-    총 발생 건수가 된다 — 응답자가 아니라 이 함수가 주간 누적을 계산한다. 중지상세
-    (자유서술)는 주 단위로 합쳐서 보여줄 방법이 마땅치 않아 이 집계에서는 제외한다 —
-    상세 내용이 필요하면 "보고" 링크로 그 지사 폼 응답을 직접 확인한다.
+    환자수/작업조정은 구글폼 문항이 "금주 신규"(응답자는 그때까지 파악한 신규분만
+    입력, 누적 계산은 하지 않음)이므로 지사·일자별 마지막 제출값을 그날의 대표값으로
+    쓴 뒤(하루 중복 제출 방지) 이번주 날짜들의 대표값을 합산한다 — 응답자가 아니라
+    이 함수가 주간 누적을 계산한다. 작업중지는 별도 "작업중지 즉시 보고" 폼에서
+    사건 1건당 1행으로 들어오므로 그냥 이번주 행 개수를 센다. 중지상세(자유서술)는
+    주 단위로 합쳐서 보여줄 방법이 마땅치 않아 이 집계에서는 제외한다 — 상세 내용이
+    필요하면 weekly_stoppage_reports()를 직접 확인한다.
     """
     cols = ["branch", "환자수", "작업조정", "작업중지", "최근제출"]
     cities = load_branch_cities()
@@ -590,22 +654,33 @@ def weekly_incident_totals() -> pd.DataFrame:
     base = pd.DataFrame({"branch": branches, "환자수": 0, "작업조정": 0, "작업중지": 0,
                           "최근제출": pd.NaT})
 
-    raw = load_incident_reports_raw()
-    if raw is None or raw.empty:
-        return base[cols]
-
     _, this_week = this_and_last_week()
-    week_rows = raw[raw["timestamp"] >= this_week].copy()
-    if week_rows.empty:
-        return base[cols]
 
-    week_rows["date"] = week_rows["timestamp"].dt.normalize()
-    daily_last = week_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
-    agg = daily_last.groupby("branch", as_index=False).agg(
-        환자수=("환자수", "sum"), 작업조정=("작업조정", "sum"), 작업중지=("작업중지", "sum"),
-        최근제출=("timestamp", "max"),
-    )
-    merged = base[["branch"]].merge(agg, on="branch", how="left")
+    raw = load_incident_reports_raw()
+    incident_agg = pd.DataFrame(columns=["branch", "환자수", "작업조정", "최근제출"])
+    if raw is not None and not raw.empty:
+        week_rows = raw[raw["timestamp"] >= this_week].copy()
+        if not week_rows.empty:
+            week_rows["date"] = week_rows["timestamp"].dt.normalize()
+            daily_last = week_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
+            incident_agg = daily_last.groupby("branch", as_index=False).agg(
+                환자수=("환자수", "sum"), 작업조정=("작업조정", "sum"), 최근제출=("timestamp", "max"))
+
+    stoppages = weekly_stoppage_reports()
+    stoppage_agg = pd.DataFrame(columns=["branch", "작업중지", "최근제출_중지"])
+    if not stoppages.empty:
+        # "작업중지" 컬럼은 옥외 작업 중지만 센다(같은 폼의 "작업 조정" 유형은 온열질환
+        # 조사 폼의 "작업조정" 컬럼이 이미 담당) — 다만 "최근제출"은 조정 포함 두 유형
+        # 모두의 최신 시각이어야 정확하므로, is_stop 플래그로 한 번에 같이 구한다.
+        stoppages = stoppages.copy()
+        stoppages["is_stop"] = stoppages["구분"].str.contains("중지", na=False)
+        stoppage_agg = stoppages.groupby("branch", as_index=False).agg(
+            작업중지=("is_stop", "sum"), 최근제출_중지=("timestamp", "max"))
+
+    merged = base[["branch"]].merge(incident_agg, on="branch", how="left")
+    merged = merged.merge(stoppage_agg, on="branch", how="left")
+    # 최근제출 = 온열질환 조사 폼과 작업중지 즉시 보고 폼 중 그 지사의 더 최근 제출시각.
+    merged["최근제출"] = merged[["최근제출", "최근제출_중지"]].max(axis=1)
     for c in ["환자수", "작업조정", "작업중지"]:
         merged[c] = merged[c].fillna(0).astype(int)
     return merged[cols]
@@ -623,15 +698,17 @@ def weekly_checklist() -> pd.DataFrame:
 
     체크리스트 문항은 "제출 시점 기준 현재 상태"를 묻는 객관식이라(예: 상시 비치·보충
     정상 / 부족 등) 날짜별로 합산할 수 있는 값이 아니다 — 이번주 안에서 가장 최근
-    제출값만 그 지사의 대표값으로 쓴다.
+    제출값만 그 지사의 대표값으로 쓴다. 같은 지사에서 이번주 여러 명이 각자 제출했을
+    수도 있으므로(응답자 구분 문항이 없어 누가 냈는지는 알 수 없다) "제출횟수"를 같이
+    보여준다 — 1보다 크면 최근 값 하나만 대표로 쓰고 있다는 걸 알아챌 수 있게.
     """
-    cols = ["branch", *CHECKLIST_FIELDS, "점검특이사항", "최근제출"]
+    cols = ["branch", *CHECKLIST_FIELDS, "점검특이사항", "최근제출", "제출횟수"]
     cities = load_branch_cities()
     branches = cities["branch"].unique().tolist() if not cities.empty else []
     if not branches:
         return pd.DataFrame(columns=cols)
     base = pd.DataFrame({"branch": branches, **{f: "" for f in CHECKLIST_FIELDS},
-                          "점검특이사항": "", "최근제출": pd.NaT})
+                          "점검특이사항": "", "최근제출": pd.NaT, "제출횟수": 0})
 
     raw = load_incident_reports_raw()
     if raw is None or raw.empty:
@@ -646,8 +723,11 @@ def weekly_checklist() -> pd.DataFrame:
         week_rows.sort_values("timestamp").groupby("branch", as_index=False).last()
         .rename(columns={"timestamp": "최근제출"})
     )
+    counts = week_rows.groupby("branch", as_index=False).size().rename(columns={"size": "제출횟수"})
+    latest = latest.merge(counts, on="branch", how="left")
     merged = base[["branch"]].merge(
-        latest[["branch", *CHECKLIST_FIELDS, "점검특이사항", "최근제출"]], on="branch", how="left")
+        latest[["branch", *CHECKLIST_FIELDS, "점검특이사항", "최근제출", "제출횟수"]], on="branch", how="left")
+    merged["제출횟수"] = merged["제출횟수"].fillna(0).astype(int)
     for f in CHECKLIST_FIELDS + ["점검특이사항"]:
         merged[f] = merged[f].fillna("")
     return merged[cols]

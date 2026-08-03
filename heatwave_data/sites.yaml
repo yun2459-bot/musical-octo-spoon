@@ -185,11 +185,11 @@ branches:
   - name: 당진
     cities:
       - name: 당진
-        lat: 36.8930
-        lon: 126.6280
+        lat: 37.0511
+        lon: 126.5143
         stn: null
         region_id: L1031200  # 당진시
-        office: true  # 지사 사무실 (충남 당진시 석문면 대호만로 2424)
+        office: true  # 지사 사무실 (충남 당진시 석문면 교로길 30 — 카카오맵 장소정보 기준 좌표, 2026-08-03 정정)
         site_count: 1
 
   - name: 삼천포

@@ -421,6 +421,23 @@ with tab4:
         if obs.empty:
             st.info("아직 쌓인 관측 데이터가 없습니다. 스케줄러가 최소 1회 이상 실행된 뒤 다시 확인해주세요.")
         else:
+            # 스케줄러(사내 PC)가 멈추면 관측 DB가 갱신되지 않는데, 화면은 옛 온도를
+            # 현재값처럼 계속 보여준다 — 폭염 판단을 잘못하게 되므로 눈에 띄게 알린다.
+            _latest_obs = obs["observed_at"].max()
+            if pd.notna(_latest_obs):
+                _age_h = (HW.now_kst() - _latest_obs).total_seconds() / 3600
+                if _age_h >= 3:
+                    st.error(
+                        f"⚠️ 관측 데이터가 **{_age_h:.0f}시간째 갱신되지 않았습니다** "
+                        f"(최신 관측 {_latest_obs.strftime('%m-%d %H:%M')}). 화면의 체감온도는 "
+                        "현재 상태가 아닐 수 있습니다 — 자동 수집 스케줄러가 멈췄는지 확인해주세요.",
+                        icon="⚠️")
+
+            _sheet_code, _sheet_msg = HW.incident_sheet_status()
+            if _sheet_code != "ok":
+                st.error(f"⚠️ 지사 제출 데이터를 읽지 못하고 있습니다 — {_sheet_msg} "
+                         "아래 표의 0은 '제출 없음'이 아니라 **연동 오류**일 수 있습니다.", icon="⚠️")
+
             _render_print_report_button()
             st.markdown("---")
 

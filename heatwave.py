@@ -430,6 +430,28 @@ def _parse_google_timestamp(raw) -> pd.Timestamp:
 
 
 @st.cache_data(ttl=300)
+def incident_sheet_status() -> tuple[str, str]:
+    """온열질환 조사 시트를 읽을 수 있는 상태인지 진단해 (코드, 설명)로 반환.
+
+    load_incident_reports_raw()는 실패해도 None만 돌려주기 때문에, 화면에는 "제출이
+    없는 것"과 "연동이 깨진 것"이 똑같이 0으로 보인다 — 안전 대시보드에서는 이 둘을
+    반드시 구분해야 해서(파이프라인이 끊겼는데 '이상 없음'으로 읽히면 위험) 상태를
+    따로 알려주는 함수를 둔다.
+    """
+    if not GOOGLE_SHEET_CSV_URL:
+        return ("no_url", "응답 시트 주소가 설정되지 않았습니다.")
+    try:
+        df = pd.read_csv(GOOGLE_SHEET_CSV_URL)
+    except Exception as e:
+        return ("fetch_fail", f"응답 시트를 불러오지 못했습니다({type(e).__name__}). "
+                              "구글시트 '웹에 게시'가 해제됐는지 확인하세요.")
+    if load_incident_reports_raw() is None:
+        return ("bad_columns", "응답 시트에서 필요한 문항(지사/환자수/작업조정 등)을 찾지 "
+                               "못했습니다. 구글폼 문항 이름이 바뀌지 않았는지 확인하세요.")
+    return ("ok", "")
+
+
+@st.cache_data(ttl=300)
 def load_incident_reports_raw() -> pd.DataFrame | None:
     """구글폼 응답 시트를 읽어 제출행 전부(지사별 중복 제거 없이) 반환 — 누적 집계용.
 
@@ -500,6 +522,9 @@ def load_incident_reports_raw() -> pd.DataFrame | None:
             df[c] = ""
 
     df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
+    # 지사명 앞뒤 공백은 제거한다 — 공백 하나 때문에 지사별 표에서 통째로 누락되면
+    # 전사 합계와 지사별 합계가 어긋나 원인을 찾기 매우 어렵다.
+    df["branch"] = df["branch"].astype(str).str.strip()
     df = df.dropna(subset=["branch", "timestamp"])
     if df.empty:
         return df
@@ -612,6 +637,9 @@ def load_stoppage_reports_raw() -> pd.DataFrame | None:
             df[c] = ""
 
     df["timestamp"] = df["timestamp"].apply(_parse_google_timestamp)
+    # 지사명 앞뒤 공백은 제거한다 — 공백 하나 때문에 지사별 표에서 통째로 누락되면
+    # 전사 합계와 지사별 합계가 어긋나 원인을 찾기 매우 어렵다.
+    df["branch"] = df["branch"].astype(str).str.strip()
     df = df.dropna(subset=["branch", "timestamp"])
     if df.empty:
         return df

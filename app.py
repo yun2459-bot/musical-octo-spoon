@@ -546,8 +546,13 @@ with tab4:
                             return "관측 데이터 없음"
                         prefix = "~" if d.get("is_estimate") else ""
                         if d.get("is_estimate"):
+                            # estimate_km은 DB에 저장된 추정치(목포/당진/삼천포 등)에는 아직
+                            # 없을 수 있어(estimate_source 문자열에 거리가 이미 포함돼 있음)
+                            # None이면 생략한다 — 여기서 죽으면 폭염 탭 전체가 크래시난다.
+                            km = d.get("estimate_km")
+                            km_part = f' {km:.0f}km' if km is not None else ""
                             text = (f'{prefix}{d["apparent_temp"]:.1f}℃ 추정 (자체 관측지점 없음, '
-                                    f'{d["estimate_source"]} {d["estimate_km"]:.0f}km 값 사용)')
+                                    f'{d["estimate_source"]}{km_part} 값 사용)')
                         else:
                             text = f'{prefix}{d["apparent_temp"]:.1f}℃ ({HW.level_label(d["level"])})'
                         if d.get("official_advisory"):

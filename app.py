@@ -209,7 +209,7 @@ def _print_report_html(week_start: pd.Timestamp | None = None) -> str:
     )
 
     return f"""
-    <div class="rpt-page">
+    <div class="rpt-page" id="page1">
       <h1>주간 온열질환 예방 대응 보고서</h1>
       <div class="rpt-date">기준기간: {period_label}</div>
       <h2>1. 전체 현황</h2>
@@ -292,7 +292,31 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
         w.document.open();
         w.document.write({doc_js});
         w.document.close();
-        setTimeout(function () {{ w.focus(); w.print(); }}, 350);
+        setTimeout(function () {{
+            // 1~4번 절(id="page1")은 특이사항이 많은 주에는 A4 한 장을 넘겨 2페이지로
+            // 넘어가버린다 — 항상 한 장에 담기도록, 실제 A4 인쇄 가능 높이(297mm -
+            // 위아래 여백 14mm*2)를 px로 정확히 잰 뒤, 넘치는 만큼 zoom으로 전체를
+            // 줄인다. mm->px 환산을 하드코딩하지 않고 화면 밖 프로브 엘리먼트로 직접
+            // 재서, 브라우저별 배율 차이에도 안전하게 맞춘다.
+            var doc = w.document;
+            var page = doc.getElementById('page1');
+            if (page) {{
+                var probe = doc.createElement('div');
+                probe.style.height = '269mm';
+                probe.style.position = 'absolute';
+                probe.style.visibility = 'hidden';
+                doc.body.appendChild(probe);
+                var targetPx = probe.getBoundingClientRect().height;
+                doc.body.removeChild(probe);
+                page.style.zoom = 1;
+                var naturalPx = page.scrollHeight;
+                if (naturalPx > targetPx) {{
+                    page.style.zoom = Math.max(0.55, targetPx / naturalPx);
+                }}
+            }}
+            w.focus();
+            w.print();
+        }}, 350);
     }};
     </script>
     """

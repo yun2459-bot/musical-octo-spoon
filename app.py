@@ -50,14 +50,50 @@ def _branch_form_url(branch: str) -> str:
 
 def _bulk_photo_template_bytes() -> bytes:
     """엑셀 일괄 사진 등록용 빈 양식 — "사진목록" 시트(지사/활동내용/사진파일명)와
-    참고용 "지사목록" 시트(정확한 지사명 철자 확인용) 두 장으로 구성한다.
+    "필독사항" 시트(작성 규칙 + 정확한 지사명 철자 참고용) 두 장으로 구성한다.
     """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "사진목록"
+    ws1.append(["지사", "활동내용", "사진파일명"])
+    for cell in ws1[1]:
+        cell.font = Font(bold=True)
+    ws1.append(["예: 광양", "예: 그늘막 설치, 이온음료 배부", "예: photo1.jpg"])
+    ws1.column_dimensions["A"].width = 14
+    ws1.column_dimensions["B"].width = 40
+    ws1.column_dimensions["C"].width = 22
+
+    ws2 = wb.create_sheet("필독사항")
+    ws2.cell(row=1, column=1, value="★ 작성 전 꼭 확인해주세요 ★").font = Font(bold=True, color="C81D25", size=13)
+    notes = [
+        "1. '사진파일명' 칸은 실제로 함께 첨부하는 사진 파일의 이름과 글자 하나까지 정확히 같아야 "
+        "합니다(대소문자·확장자 포함). 다르면 그 행은 등록되지 않습니다.",
+        "2. '지사' 칸은 아래 지사 목록의 철자와 정확히 같아야 합니다(띄어쓰기도 동일해야 함).",
+        "3. 한 행 = 사진 1장입니다. 여러 장을 올리려면 행을 여러 개로 나눠 적어주세요"
+        "(같은 지사를 여러 행에 반복해서 적어도 됩니다).",
+        "4. 사진 파일 형식은 jpg, jpeg, png만 가능합니다.",
+        "5. '사진목록' 시트 2행(‘예:’로 시작하는 예시 행)은 지우고 실제 데이터만 남겨서 올려주세요.",
+        "6. 등록 버튼을 누른 뒤 화면(사진 목록·보고서)에 반영되기까지 최대 1분 정도 걸릴 수 있습니다.",
+    ]
+    row = 3
+    for note in notes:
+        ws2.cell(row=row, column=1, value=note)
+        row += 1
+    row += 1
+    ws2.cell(row=row, column=1, value="지사 목록 (정확한 철자 참고용)").font = Font(bold=True)
+    row += 1
+    for branch in HW.branch_order():
+        ws2.cell(row=row, column=1, value=branch)
+        row += 1
+    ws2.column_dimensions["A"].width = 90
+    for r in range(3, 3 + len(notes)):
+        ws2.cell(row=r, column=1).alignment = Alignment(wrap_text=True)
+
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        pd.DataFrame({"지사": ["예: 광양"], "활동내용": ["예: 그늘막 설치, 이온음료 배부"],
-                      "사진파일명": ["예: photo1.jpg"]}).to_excel(writer, index=False, sheet_name="사진목록")
-        pd.DataFrame({"지사 목록(정확한 철자 참고용)": HW.branch_order()}).to_excel(
-            writer, index=False, sheet_name="지사목록")
+    wb.save(buf)
     return buf.getvalue()
 
 

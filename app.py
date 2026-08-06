@@ -61,7 +61,10 @@ def _bulk_photo_template_bytes() -> bytes:
     ws1.append(["지사", "활동내용", "사진파일명"])
     for cell in ws1[1]:
         cell.font = Font(bold=True)
-    ws1.append(["예: 광양", "예: 그늘막 설치, 이온음료 배부", "예: photo1.jpg"])
+    # 예전엔 이 아래에 "예: 광양 / 예: ... / 예: photo1.jpg" 예시 행을 넣어뒀는데,
+    # 실제 데이터인 줄 알고 일부 칸만 고쳐 쓰다 "예: photo1.jpg"가 그대로 남아
+    # 매칭이 실패하는 사고가 있었다(2026-08-06) — 예시는 아래 "필독사항" 시트에
+    # 텍스트로만 보여주고, 이 시트엔 실제로 채워 넣을 빈 칸만 남긴다.
     ws1.column_dimensions["A"].width = 14
     ws1.column_dimensions["B"].width = 40
     ws1.column_dimensions["C"].width = 22
@@ -70,12 +73,13 @@ def _bulk_photo_template_bytes() -> bytes:
     ws2.cell(row=1, column=1, value="★ 작성 전 꼭 확인해주세요 ★").font = Font(bold=True, color="C81D25", size=13)
     notes = [
         "1. '사진파일명' 칸은 실제로 함께 첨부하는 사진 파일의 이름과 글자 하나까지 정확히 같아야 "
-        "합니다(대소문자·확장자 포함). 다르면 그 행은 등록되지 않습니다.",
+        "합니다(대소문자·확장자·띄어쓰기 포함). 다르면 그 행은 등록되지 않습니다.",
         "2. '지사' 칸은 아래 지사 목록의 철자와 정확히 같아야 합니다(띄어쓰기도 동일해야 함).",
         "3. 한 행 = 사진 1장입니다. 여러 장을 올리려면 행을 여러 개로 나눠 적어주세요"
         "(같은 지사를 여러 행에 반복해서 적어도 됩니다).",
         "4. 사진 파일 형식은 jpg, jpeg, png만 가능합니다.",
-        "5. '사진목록' 시트 2행(‘예:’로 시작하는 예시 행)은 지우고 실제 데이터만 남겨서 올려주세요.",
+        "5. 작성 예시 — 지사: 광양 / 활동내용: 그늘막 설치, 이온음료 배부 / "
+        "사진파일명: photo1.jpg (실제 올리는 사진 파일 이름 그대로).",
         "6. 등록 버튼을 누른 뒤 화면(사진 목록·보고서)에 반영되기까지 최대 1분 정도 걸릴 수 있습니다.",
     ]
     row = 3
@@ -1076,10 +1080,28 @@ with tab4:
                         "📥 엑셀 양식 다운로드", _bulk_photo_template_bytes(),
                         file_name="활동사진_일괄등록_양식.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    _xlsx_file = st.file_uploader("① 작성한 엑셀 파일", type=["xlsx"], key="_bulk_xlsx")
+
+                    # 등록에 성공하면 업로드 칸을 다시 빈칸으로 돌려서 "확실히 등록됐다"는 걸
+                    # 눈으로 확인할 수 있게 한다. Streamlit은 위젯 key가 그대로면 값이 계속
+                    # 남아있으므로, key 뒤에 세대(gen) 번호를 붙였다가 성공 시 번호를 올려서
+                    # "새 위젯"으로 취급되게 만드는 방식을 쓴다. 결과 메시지는 rerun 직후에
+                    # 바로 보여야 리셋된 빈 칸과 함께 한 화면에 뜬다.
+                    _gen = st.session_state.setdefault("_bulk_uploader_gen", 0)
+                    _pending = st.session_state.pop("_bulk_upload_result", None)
+                    if _pending:
+                        if _pending["success"]:
+                            st.success(
+                                f"✅ {len(_pending['success'])}건 등록 완료: " +
+                                ", ".join(f"{s['branch']}({s['filename']})" for s in _pending["success"]) +
+                                " — 화면에 반영되기까지 최대 1분 정도 걸릴 수 있습니다.")
+                        if _pending["errors"]:
+                            st.error("다음 행은 등록에 실패했습니다: " +
+                                     " / ".join(f"{e['row']}행: {e['reason']}" for e in _pending["errors"]))
+
+                    _xlsx_file = st.file_uploader("① 작성한 엑셀 파일", type=["xlsx"], key=f"_bulk_xlsx_{_gen}")
                     _photo_files = st.file_uploader(
                         "② 사진 파일들 (엑셀의 '사진파일명'과 이름이 정확히 같아야 매칭됩니다)",
-                        type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="_bulk_photos")
+                        type=["jpg", "jpeg", "png"], accept_multiple_files=True, key=f"_bulk_photos_{_gen}")
                     if st.button("📤 일괄 등록", width="stretch",
                                   disabled=not (_xlsx_file and _photo_files)):
                         try:
@@ -1097,36 +1119,49 @@ with tab4:
                                          "— 양식을 다시 받아서 칸 이름을 바꾸지 말고 채워주세요.")
                             else:
                                 _file_map = {f.name: f.getvalue() for f in _photo_files}
-                                _rows = []
-                                for _, _r in _bulk_df.iterrows():
+                                _available_names = sorted(_file_map.keys())
+                                _rows, _pre_errors = [], []
+                                for _excel_row, (_, _r) in enumerate(_bulk_df.iterrows(), start=2):
                                     _branch = str(_r.get("지사") or "").strip()
                                     _fname = str(_r.get("사진파일명") or "").strip()
-                                    if not _branch or _branch.startswith("예:") or not _fname:
-                                        continue  # 빈 행/예시 행은 건너뜀
+                                    # 옛 버전 양식(예시 행이 남아있던)을 계속 쓰는 사람이 있을 수
+                                    # 있어, 지사·파일명 어느 쪽에 "예:"가 남아있어도 건너뛴다.
+                                    if (not _branch or not _fname
+                                            or _branch.startswith("예:") or _fname.startswith("예:")):
+                                        continue
+                                    _content = _file_map.get(_fname)
+                                    if _content is None:
+                                        # 여기서 바로 "업로드한 파일 목록"까지 보여줘야, 사용자가
+                                        # 엑셀에 적은 이름과 실제 파일명이 어떻게 다른지 한눈에
+                                        # 비교해서 고칠 수 있다(2026-08-06: 예시 행 "예: photo1.jpg"를
+                                        # 그대로 남겨서 실패한 사고 이후 추가).
+                                        _pre_errors.append({
+                                            "row": _excel_row,
+                                            "reason": (f"'{_fname}' 파일을 찾지 못했습니다 — 업로드한 "
+                                                       f"사진 파일명: {', '.join(_available_names) if _available_names else '(없음)'}"),
+                                        })
+                                        continue
                                     _rows.append({
                                         "branch": _branch,
                                         "description": str(_r.get("활동내용") or "").strip(),
                                         "filename": _fname,
-                                        "content": _file_map.get(_fname),
+                                        "content": _content,
                                     })
-                                if not _rows:
-                                    st.warning("엑셀에서 등록할 행을 찾지 못했습니다 — 예시 행을 지우고 "
-                                               "실제 데이터를 입력했는지 확인해주세요.")
+                                if not _rows and not _pre_errors:
+                                    st.warning("엑셀에서 등록할 행을 찾지 못했습니다 — 지사·사진파일명 "
+                                               "칸에 실제 데이터를 입력했는지 확인해주세요.")
                                 else:
-                                    with st.spinner(f"{len(_rows)}건 등록 중..."):
-                                        _bulk_result = HW.submit_bulk_photos(_rows)
+                                    if _rows:
+                                        with st.spinner(f"{len(_rows)}건 등록 중..."):
+                                            _bulk_result = HW.submit_bulk_photos(_rows)
+                                    else:
+                                        _bulk_result = {"success": [], "errors": []}
+                                    _bulk_result["errors"] = _pre_errors + _bulk_result["errors"]
                                     if _bulk_result["success"]:
-                                        st.success(
-                                            f"✅ {len(_bulk_result['success'])}건 등록 완료: " +
-                                            ", ".join(f"{s['branch']}({s['filename']})"
-                                                      for s in _bulk_result["success"]) +
-                                            " — 화면에 반영되기까지 최대 1분 정도 걸릴 수 있습니다.")
                                         HW.load_bulk_photo_reports.clear()
-                                    if _bulk_result["errors"]:
-                                        st.error(
-                                            "다음 행은 등록에 실패했습니다: " +
-                                            " / ".join(f"{e['row']}행: {e['reason']}"
-                                                       for e in _bulk_result["errors"]))
+                                        st.session_state["_bulk_uploader_gen"] += 1
+                                    st.session_state["_bulk_upload_result"] = _bulk_result
+                                    st.rerun()
 
             if not photos.empty:
                 # 한 지사가 사진 여러 장을 한꺼번에 올리면 제출시각이 모두 같아 목록에서
@@ -1246,7 +1281,7 @@ with tab4:
             st.markdown("---")
             with st.expander("⚖️ 고용노동부 규정 개정 참고사항"):
                 st.markdown(
-                    "**세방 SAFETY TF(사내 기준)**: 주의 33℃ · 경고 35℃ · 위험 38℃\n\n"
+                    "**'세방(주) 온열질환 예방지침' REV2(사내 기준)**: 주의 33℃ · 경고 35℃ · 위험 38℃\n\n"
                     "2025년 7월 17일 「산업안전보건기준에 관한 규칙」 개정으로 **체감온도 31℃ 이상을 "
                     "'폭염 작업'으로 정의**하고, 그 구간에서 체감온도 측정·기록과 조치(냉방·통풍장치/"
                     "작업시간 조정/휴식 중 1개 이상) 이행이 법적 의무가 됐습니다."

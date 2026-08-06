@@ -11,6 +11,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 SOURCE = Path(r"C:\Users\윤용호\Desktop\온도를 조져보자")
 DEST = Path(__file__).parent / "heatwave_data"
 
@@ -19,6 +21,20 @@ FILES = [
     SOURCE / "config" / "sites.yaml",
     SOURCE / "Map_of_South_Korea-blank.svg",
 ]
+
+
+def _sync_sites_yaml_without_recipients(src: Path, dst: Path) -> None:
+    """sites.yaml은 지사별 담당자 이름·휴대폰번호(recipients)를 담고 있어 원본 그대로
+    복사하면 안 된다 — 이 저장소(나무발발이)는 public GitHub라, 그대로 커밋되면 개인
+    연락처가 그대로 공개된다(2026-08-06, 경인 지사 3명 등록 직후 발견해 긴급 수정).
+    recipients 필드를 뺀 사본만 만들어 커밋한다.
+    """
+    with open(src, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    for branch in data.get("branches", []):
+        branch.pop("recipients", None)
+    with open(dst, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, sort_keys=False)
 
 
 def main() -> None:
@@ -31,6 +47,10 @@ def main() -> None:
         sys.exit(1)
 
     for f in FILES:
+        if f.name == "sites.yaml":
+            _sync_sites_yaml_without_recipients(f, DEST / f.name)
+            print(f"복사됨(recipients 제외): {f.name}")
+            continue
         shutil.copy2(f, DEST / f.name)
         print(f"복사됨: {f.name}")
 

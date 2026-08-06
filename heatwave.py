@@ -1070,3 +1070,23 @@ def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
 
     out["주차"] = out["week"].map({last_week: "지난주", this_week: "이번주"})
     return out
+
+
+def weekly_top_alert_branch() -> dict | None:
+    """이번주 폭염특보 단계가 가장 높았던 지사 — 동률(같은 단계)이면 그 단계 발령
+    횟수(weekly_alert_counts_by_branch 기준, 지사·단계·일자 중복 제거된 값)가
+    더 많은 지사를 고른다. 이번주 발령이 하나도 없으면 None.
+    """
+    notif = load_notifications()
+    weekly = weekly_alert_counts_by_branch(notif)
+    weekly = weekly[(weekly["주차"] == "이번주") & (weekly["branch"] != "")]
+    if weekly.empty:
+        return None
+    level_rank = {lvl: i for i, lvl in enumerate(LEVEL_ORDER)}
+    weekly = weekly.copy()
+    weekly["_rank"] = weekly["level"].map(level_rank)
+    # 한 지사가 이번주에 여러 단계를 겪었을 수 있으니, 지사별로 가장 높은 단계
+    # 행만 남긴 뒤 그 지사들끼리 단계→횟수 순으로 비교한다.
+    top_per_branch = weekly.loc[weekly.groupby("branch")["_rank"].idxmax()]
+    top = top_per_branch.sort_values(["_rank", "발령횟수"], ascending=[False, False]).iloc[0]
+    return {"branch": top["branch"], "level": top["level"], "count": int(top["발령횟수"])}

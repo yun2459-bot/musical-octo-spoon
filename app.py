@@ -85,11 +85,15 @@ def _print_report_html() -> str:
 
     top_line = (f"{week_top['branch']} · {week_top['apparent_temp']:.1f}℃" if week_top is not None
                 else "관측 데이터 없음")
+    top_alert = HW.weekly_top_alert_branch()
+    top_alert_line = (f"{top_alert['branch']} · {HW.level_label(top_alert['level'])} 단계 "
+                       f"({top_alert['count']}회)" if top_alert else "이번주 발령 없음")
     section1 = f"""
     <table class="rpt-table">
       <tr><th>누적 온열질환 발생 인원</th><td>{esum['cumulative']}명</td></tr>
       <tr><th>이번주 온열질환 발생</th><td>{esum['this_week']}명</td></tr>
       <tr><th>주간 최고 온도 사업장</th><td>{html.escape(top_line)}</td></tr>
+      <tr><th>이번주 최고 폭염특보 단계 지사</th><td>{html.escape(top_alert_line)}</td></tr>
       <tr><th>이번주 옥외 작업 중지</th><td>{len(stoppages)}건</td></tr>
     </table>
     """
@@ -528,6 +532,7 @@ with tab4:
             col_map, col_kpi = st.columns([3, 2])
 
             with col_map:
+                st.markdown('<div id="mapColAnchor"></div>', unsafe_allow_html=True)
                 st.subheader("🗺️ 지사별 폭염 현황 지도")
                 kakao_key = st.secrets.get("KAKAO_JS_KEY", "")
                 if not kakao_key:
@@ -709,8 +714,13 @@ with tab4:
                     )
 
             with col_kpi:
-                # 고정 높이 컨테이너(height=615)는 내용이 넘칠 때 내부 스크롤이 생겨 오히려
-                # 어색해서, 테두리 카드로만 지도와 짝을 맞추고 높이는 내용에 맡긴다.
+                # 예전엔 고정 높이 컨테이너(height=615)를 썼다가 내용이 넘칠 때 내부
+                # 스크롤이 생겨 어색해서, 높이를 내용에 맡기는 쪽으로 바꿨었다. 그런데
+                # 그러면 반대로 지도(고정 900~1050px)보다 이 카드가 짧을 땐 그 아래가
+                # 빈 여백으로 남고, 내용이 많을 땐 지도보다 카드가 길어져 옆으로 나란히
+                # 볼 때 비율이 안 맞아 보인다는 피드백을 받았다 — 아래 fit 스크립트로
+                # 카드 높이를 지도와 항상 맞추고, 내용이 넘치면 스크롤 대신 CSS zoom으로
+                # 전체를 살짝 축소해 한 화면 안에 다 들어오게 한다.
                 with st.container(border=True):
                     st.subheader("🔥 현재 최고 체감온도 지사")
                     summary_now = HW.branch_summary(obs)
@@ -796,6 +806,51 @@ with tab4:
                             st.error(f"**{row.branch}** {icon} {row.구분} · {row.timestamp.strftime('%H:%M')}")
                             st.text(detail)
                     st.link_button("🚨 지금 작업조정·중지 보고하기", _STOPPAGE_FORM_URL, width="stretch")
+
+                # 카드(위 st.container(border=True))를 지도 컬럼과 같은 높이로 강제하고,
+                # 내용이 넘치면 스크롤이 아니라 CSS zoom으로 전체를 살짝 줄여 한 화면에
+                # 다 들어오게 한다. 카드 "안"이 아니라 col_kpi 레벨에 둬서, 이 스크립트
+                # 자신(높이 0 iframe)이 카드의 내용 높이 측정에 섞여 들어가지 않게 한다.
+                components.html("""
+                <script>
+                (function () {
+                    function fit() {
+                        var doc = window.parent.document;
+                        var anchor = doc.getElementById('mapColAnchor');
+                        if (!anchor) return;
+                        var mapCol = anchor.closest('[data-testid="stColumn"]');
+                        if (!mapCol) return;
+                        var row = mapCol.parentElement;
+                        var kpiCol = row && row.children[1];
+                        if (!kpiCol) return;
+                        var card = null;
+                        kpiCol.querySelectorAll('[data-testid="stVerticalBlock"]').forEach(function (el) {
+                            if (!card && parseFloat(getComputedStyle(el).borderWidth) > 0) card = el;
+                        });
+                        if (!card) return;
+                        var targetH = mapCol.scrollHeight;
+                        // Streamlit 자체 CSS(emotion)가 stVerticalBlock의 높이를 !important로
+                        // 깔아둬서, 그냥 .style.height = ... 로는 무시된다(직접 확인함) —
+                        // setProperty에 'important'를 명시해야 실제로 적용된다.
+                        card.style.setProperty("zoom", "1", "important");
+                        card.style.setProperty("height", targetH + "px", "important");
+                        card.style.setProperty("min-height", targetH + "px", "important");
+                        card.style.setProperty("max-height", targetH + "px", "important");
+                        card.style.setProperty("overflow", "hidden", "important");
+                        var naturalH = card.scrollHeight;
+                        if (naturalH > targetH) {
+                            card.style.setProperty("zoom", Math.max(0.5, targetH / naturalH), "important");
+                        }
+                    }
+                    fit();
+                    setTimeout(fit, 400);
+                    setTimeout(fit, 1200);
+                    try {
+                        new ResizeObserver(fit).observe(window.parent.document.body);
+                    } catch (e) {}
+                })();
+                </script>
+                """, height=0)
 
             st.markdown("---")
             st.subheader("📅 주차별 온열질환 대응 현황")

@@ -144,30 +144,33 @@ def _print_report_html() -> str:
                 return "ok"
             return ""
 
+        n_status = len(HW.CHECKLIST_FIELDS)
         for r in checklist.itertuples():
             cells = "".join(
                 f'<td class="{_cell_class(f, str(getattr(r, f)))}">'
                 f'{html.escape(str(getattr(r, f)) or "-")}</td>'
                 for f in HW.CHECKLIST_FIELDS
             )
-            # 구글폼 자유서술 특이사항은 줄바꿈으로 구조화해 적는 경우가 많다(접수일자/
-            # 신고내용/조치결과 등 항목별 줄). html.escape는 줄바꿈을 안 지워주지만
-            # 브라우저는 기본적으로 \n을 공백으로 뭉개버리므로, <br>로 바꿔 원래
-            # 줄바꿈 구조를 인쇄물에도 그대로 살린다.
+            rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}</tr>")
+            # 구글폼 자유서술 특이사항은 줄바꿈으로 구조화해 적는 경우가 많고(접수일자/
+            # 신고내용/조치결과 등 항목별 줄) 길이도 제각각이라, 좁은 옆 칸에 욱여넣는
+            # 대신 내용이 있는 지사만 그 아래 폭 전체를 쓰는 병합 행을 따로 붙인다
+            # (내용 없는 지사는 이 행 자체가 안 생겨 표가 불필요하게 늘어지지 않는다).
+            # html.escape는 줄바꿈을 안 지워주지만 브라우저는 기본적으로 \n을 공백으로
+            # 뭉개버리므로, <br>로 바꿔 원래 줄바꿈 구조를 인쇄물에도 그대로 살린다.
             note = html.escape(str(r.점검특이사항) or "").replace("\n", "<br>")
-            rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}<td>{note}</td></tr>")
-        n_status = len(HW.CHECKLIST_FIELDS)
-        # 특이사항(자유서술, 내용이 김)이 예전엔 상태 칸 하나보다도 좁았던 걸(16% <
-        # 15.2%씩 5칸) 바로잡아, 지사·상태 칸은 짧은 라벨만 담으니 좁게 두고
-        # 특이사항에 폭 대부분을 몰아준다.
-        status_w = 35 / n_status
+            if note.strip():
+                rows3.append(f'<tr class="rpt-note-row"><td class="rpt-note-label">특이사항</td>'
+                             f'<td colspan="{n_status}">{note}</td></tr>')
+        # 지사 칸은 좁게, 상태 5칸은 짧은 라벨만 담으니 균등하게 나머지 폭을 쓴다.
+        status_w = 88 / n_status
         colgroup = (
-            '<colgroup><col style="width:7%">'
+            '<colgroup><col style="width:12%">'
             + f'<col style="width:{status_w:.1f}%">' * n_status
-            + '<col style="width:58%"></colgroup>'
+            + '</colgroup>'
         )
         section3 = (f'<table class="rpt-table small">{colgroup}'
-                    f'<tr><th>지사</th>{head_cols}<th>특이사항</th></tr>{"".join(rows3)}</table>')
+                    f'<tr><th>지사</th>{head_cols}</tr>{"".join(rows3)}</table>')
 
     # 사진이 없는 지사도 "그 지사엔 아직 없다"는 게 보이도록 빈 칸으로 채워서 전체
     # 지사를 다 늘어놓는다 — 있는 지사만 나오면 빠진 지사가 안 보여 헷갈린다.
@@ -231,6 +234,10 @@ def _render_print_report_button() -> None:
         word-break: keep-all; overflow-wrap: break-word; vertical-align: top; line-height: 1.5; }
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
     .rpt-table td.ok { background: #d9f2e3; color: #14532d; }
+    /* 특이사항 병합 행 — 위 상태 행과 한 묶음으로 보이도록 위쪽 테두리를 없애고
+       살짝 다른 배경으로 구분한다. */
+    .rpt-table.small tr.rpt-note-row td { border-top: none; background: #fafafa; }
+    .rpt-table.small td.rpt-note-label { font-weight: 700; color: #555; white-space: nowrap; }
     .rpt-empty { color: #888; font-size: 12px; }
     .rpt-note { color: #900; font-size: 11px; margin: 4px 0 0; }
     .rpt-page { page-break-after: always; }

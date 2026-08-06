@@ -6,6 +6,7 @@ AI 기반 현장 안전 데이터 통합 분석 대시보드 (프로토타입)
 """
 import base64
 import html
+import io
 import json
 import os
 import re
@@ -45,6 +46,19 @@ _PATIENT_FORM_URL = "https://docs.google.com/forms/d/1hJrpkQfOviMaUNnb5bRvyRm-5X
 
 def _branch_form_url(branch: str) -> str:
     return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
+
+
+def _bulk_photo_template_bytes() -> bytes:
+    """엑셀 일괄 사진 등록용 빈 양식 — "사진목록" 시트(지사/활동내용/사진파일명)와
+    참고용 "지사목록" 시트(정확한 지사명 철자 확인용) 두 장으로 구성한다.
+    """
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        pd.DataFrame({"지사": ["예: 광양"], "활동내용": ["예: 그늘막 설치, 이온음료 배부"],
+                      "사진파일명": ["예: photo1.jpg"]}).to_excel(writer, index=False, sheet_name="사진목록")
+        pd.DataFrame({"지사 목록(정확한 철자 참고용)": HW.branch_order()}).to_excel(
+            writer, index=False, sheet_name="지사목록")
+    return buf.getvalue()
 
 
 def _print_report_html(week_start: pd.Timestamp | None = None) -> str:
@@ -1012,6 +1026,72 @@ with tab4:
             st.link_button("📸 현장 사진 보고하기", _PHOTO_FORM_URL, width="stretch")
             st.caption("사진 업로드 문항이 있어 제출 시 구글 계정 로그인이 필요합니다. "
                        "지난주 이전에 올린 사진은 여기 목록과 인쇄 보고서에 나오지 않습니다(이번주 것만 반영).")
+
+            # 구글폼(파일 업로드 문항이라 구글 로그인 필요)과 별개로, 여러 장을 한 번에
+            # 등록하고 싶을 때 쓰는 두 번째 경로 — 엑셀에 지사·활동내용·사진파일명을 적고
+            # 사진 파일들을 같이 올리면 파일명으로 매칭해 한 번에 등록한다. GITHUB_TOKEN이
+            # secrets에 없으면(다른 배포본 등) 이 기능 자체를 숨긴다.
+            if HW.github_write_enabled():
+                with st.expander("📊 엑셀로 사진 일괄 등록 (여러 장 한 번에, 구글 로그인 불필요)"):
+                    st.caption("① 아래 양식을 받아 지사·활동내용·사진파일명을 채우고 ② 그 엑셀과 "
+                               "사진 파일들을 함께 올린 뒤 ③ 일괄 등록을 누르면, 파일명으로 자동 매칭해 "
+                               "한 번에 등록됩니다.")
+                    st.download_button(
+                        "📥 엑셀 양식 다운로드", _bulk_photo_template_bytes(),
+                        file_name="활동사진_일괄등록_양식.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    _xlsx_file = st.file_uploader("① 작성한 엑셀 파일", type=["xlsx"], key="_bulk_xlsx")
+                    _photo_files = st.file_uploader(
+                        "② 사진 파일들 (엑셀의 '사진파일명'과 이름이 정확히 같아야 매칭됩니다)",
+                        type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="_bulk_photos")
+                    if st.button("📤 일괄 등록", width="stretch",
+                                  disabled=not (_xlsx_file and _photo_files)):
+                        try:
+                            _bulk_df = pd.read_excel(_xlsx_file, sheet_name="사진목록")
+                        except Exception:
+                            try:
+                                _bulk_df = pd.read_excel(_xlsx_file, sheet_name=0)
+                            except Exception as _e:
+                                st.error(f"엑셀을 읽지 못했습니다: {_e}")
+                                _bulk_df = None
+                        if _bulk_df is not None:
+                            _missing_cols = {"지사", "활동내용", "사진파일명"} - set(_bulk_df.columns)
+                            if _missing_cols:
+                                st.error(f"엑셀에 필요한 칸이 없습니다: {', '.join(_missing_cols)} "
+                                         "— 양식을 다시 받아서 칸 이름을 바꾸지 말고 채워주세요.")
+                            else:
+                                _file_map = {f.name: f.getvalue() for f in _photo_files}
+                                _rows = []
+                                for _, _r in _bulk_df.iterrows():
+                                    _branch = str(_r.get("지사") or "").strip()
+                                    _fname = str(_r.get("사진파일명") or "").strip()
+                                    if not _branch or _branch.startswith("예:") or not _fname:
+                                        continue  # 빈 행/예시 행은 건너뜀
+                                    _rows.append({
+                                        "branch": _branch,
+                                        "description": str(_r.get("활동내용") or "").strip(),
+                                        "filename": _fname,
+                                        "content": _file_map.get(_fname),
+                                    })
+                                if not _rows:
+                                    st.warning("엑셀에서 등록할 행을 찾지 못했습니다 — 예시 행을 지우고 "
+                                               "실제 데이터를 입력했는지 확인해주세요.")
+                                else:
+                                    with st.spinner(f"{len(_rows)}건 등록 중..."):
+                                        _bulk_result = HW.submit_bulk_photos(_rows)
+                                    if _bulk_result["success"]:
+                                        st.success(
+                                            f"✅ {len(_bulk_result['success'])}건 등록 완료: " +
+                                            ", ".join(f"{s['branch']}({s['filename']})"
+                                                      for s in _bulk_result["success"]) +
+                                            " — 화면에 반영되기까지 최대 1분 정도 걸릴 수 있습니다.")
+                                        HW.load_bulk_photo_reports.clear()
+                                    if _bulk_result["errors"]:
+                                        st.error(
+                                            "다음 행은 등록에 실패했습니다: " +
+                                            " / ".join(f"{e['row']}행: {e['reason']}"
+                                                       for e in _bulk_result["errors"]))
+
             if not photos.empty:
                 # 한 지사가 사진 여러 장을 한꺼번에 올리면 제출시각이 모두 같아 목록에서
                 # 서로 구분되지 않는다 — 지사별로 번호를 매겨 캐러셀 캡션과 선택 목록에

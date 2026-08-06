@@ -10,6 +10,7 @@ sync_heatwave_data.py를 실행해 원본을 이 폴더로 복사한 뒤 git com
 """
 from __future__ import annotations
 
+import base64
 import math
 import re
 import sqlite3
@@ -17,6 +18,7 @@ from datetime import timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+import requests
 import streamlit as st
 import yaml
 
@@ -1026,6 +1028,133 @@ def _drive_thumbnail_url(link: str, size: int = 500) -> str | None:
     return f"https://drive.google.com/thumbnail?id={m.group(1)}&sz=w{size}"
 
 
+# ------------------------------------------------------------- 엑셀 일괄 사진 등록
+# 구글폼(파일 업로드 문항이 있어 구글 로그인이 필요)과 별개로, 엑셀+사진 파일을 한
+# 번에 올려 등록하는 두 번째 경로. Google Sheets에 실제로 쓰려면 서비스 계정이
+# 필요한데 이 계정은 조직 정책(iam.disableServiceAccountKeyCreation)에 막혀 키를
+# 못 만들어서(2026-08-06 확인), 대신 GitHub Contents API로 이 저장소에 직접
+# 커밋하는 방식을 쓴다 — 저장소가 public이라 읽기는 인증 없이 raw URL로 바로
+# 되고, 쓰기(커밋)만 개인 액세스 토큰(PAT, Contents: Read and write 권한)이 필요하다.
+GITHUB_REPO = "yun2459-bot/musical-octo-spoon"
+GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}/contents"
+GITHUB_RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
+BULK_PHOTOS_DIR = "heatwave_data/bulk_photos"
+BULK_PHOTOS_CSV = "heatwave_data/bulk_photos.csv"
+BULK_PHOTOS_COLS = ["branch", "timestamp", "description", "image_path"]
+
+
+def _github_token() -> str | None:
+    try:
+        return st.secrets.get("GITHUB_TOKEN")
+    except Exception:
+        return None
+
+
+def github_write_enabled() -> bool:
+    """GITHUB_TOKEN이 secrets에 등록돼 있으면 True — 화면에서 업로드 UI 노출 여부 결정."""
+    return bool(_github_token())
+
+
+def _github_headers() -> dict:
+    return {"Authorization": f"Bearer {_github_token()}", "Accept": "application/vnd.github+json"}
+
+
+def _github_get_file(path: str) -> tuple[bytes | None, str | None]:
+    """GitHub Contents API로 파일 내용(bytes)과 sha를 읽는다. 없으면 (None, None)."""
+    r = requests.get(f"{GITHUB_API_BASE}/{path}", headers=_github_headers(), timeout=15)
+    if r.status_code == 404:
+        return None, None
+    r.raise_for_status()
+    j = r.json()
+    return base64.b64decode(j["content"]), j["sha"]
+
+
+def _github_put_file(path: str, content: bytes, message: str, sha: str | None = None) -> None:
+    """GitHub Contents API로 파일을 만들거나 덮어쓴다(sha를 주면 업데이트, 안 주면 신규)."""
+    payload = {"message": message, "content": base64.b64encode(content).decode("ascii")}
+    if sha:
+        payload["sha"] = sha
+    r = requests.put(f"{GITHUB_API_BASE}/{path}", headers=_github_headers(), json=payload, timeout=20)
+    r.raise_for_status()
+
+
+@st.cache_data(ttl=60)
+def load_bulk_photo_reports() -> pd.DataFrame:
+    """엑셀 일괄 등록으로 GitHub에 커밋된 사진 목록 — (branch, photo_url, timestamp,
+    description). 로컬 스냅샷이 아니라 raw.githubusercontent.com에서 매번 최신
+    커밋을 직접 읽는다(로컬 heatwave_data/는 git pull 전까지 안 바뀌므로, 업로드
+    직후에도 바로 반영되려면 여기서 최신을 봐야 한다). 파일이 없으면(아직 한 번도
+    등록된 적 없음) 빈 DataFrame.
+    """
+    cols = ["branch", "photo_url", "timestamp", "description"]
+    try:
+        r = requests.get(f"{GITHUB_RAW_BASE}/{BULK_PHOTOS_CSV}", timeout=10)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if r.status_code != 200:
+        return pd.DataFrame(columns=cols)
+    try:
+        df = pd.read_csv(pd.io.common.StringIO(r.text))
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if df.empty or not set(BULK_PHOTOS_COLS).issubset(df.columns):
+        return pd.DataFrame(columns=cols)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["photo_url"] = df["image_path"].apply(lambda p: f"{GITHUB_RAW_BASE}/{p}")
+    return df[["branch", "photo_url", "timestamp", "description"]]
+
+
+def submit_bulk_photos(rows: list[dict]) -> dict:
+    """엑셀에서 파싱한 행(branch, description, filename, content bytes)을 GitHub에
+    커밋한다 — 사진 파일마다 별도 커밋 + 마지막에 목록 CSV 한 번 업데이트.
+
+    각 row: {"branch": str, "description": str, "filename": str, "content": bytes}.
+    반환: {"success": [{"branch":..., "filename":...}, ...], "errors": [{"row":..., "reason":...}, ...]}.
+    """
+    now = now_kst()
+    ok, errors = [], []
+    new_records = []
+    valid_branches = set(branch_order())
+
+    for i, row in enumerate(rows, start=1):
+        branch = str(row.get("branch", "")).strip()
+        filename = str(row.get("filename", "")).strip()
+        description = str(row.get("description", "")).strip()
+        content = row.get("content")
+        if branch not in valid_branches:
+            errors.append({"row": i, "reason": f"지사명 '{branch}'을(를) 알 수 없습니다"})
+            continue
+        if not content:
+            errors.append({"row": i, "reason": f"'{filename}'에 매칭되는 사진 파일을 못 찾았습니다"})
+            continue
+        ext = Path(filename).suffix.lower() or ".jpg"
+        safe_name = f"{branch}_{now.strftime('%Y%m%d_%H%M%S')}_{i}{ext}"
+        image_path = f"{BULK_PHOTOS_DIR}/{safe_name}"
+        try:
+            _github_put_file(image_path, content, f"엑셀 일괄 등록: {branch} 활동사진 ({filename})")
+        except Exception as exc:
+            errors.append({"row": i, "reason": f"업로드 실패: {exc}"})
+            continue
+        new_records.append({
+            "branch": branch, "timestamp": now.isoformat(timespec="seconds"),
+            "description": description, "image_path": image_path,
+        })
+        ok.append({"branch": branch, "filename": filename})
+
+    if new_records:
+        existing_bytes, sha = _github_get_file(BULK_PHOTOS_CSV)
+        if existing_bytes:
+            existing_df = pd.read_csv(pd.io.common.BytesIO(existing_bytes))
+        else:
+            existing_df = pd.DataFrame(columns=BULK_PHOTOS_COLS)
+        updated_df = pd.concat([existing_df, pd.DataFrame(new_records)], ignore_index=True)
+        csv_bytes = updated_df[BULK_PHOTOS_COLS].to_csv(index=False).encode("utf-8")
+        _github_put_file(BULK_PHOTOS_CSV, csv_bytes,
+                          f"엑셀 일괄 등록: 활동사진 {len(new_records)}건 추가", sha=sha)
+
+    return {"success": ok, "errors": errors}
+
+
 # 캐러셀·인쇄 보고서 사진 고르기에 실제로 그리는 지사별 사진 수 상한 — 시즌 내내
 # 제한 없이 쌓이면 <img> 태그가 계속 늘어나(각각 구글 드라이브로 네트워크 요청)
 # 페이지가 점점 무거워진다. 예전엔 전체 합산 24장으로 한 번에 잘랐는데, 그러면
@@ -1088,7 +1217,8 @@ def load_photo_reports() -> pd.DataFrame:
 
 
 def weekly_photo_reports(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
-    """해당 주(월~일, 기본값 이번주)에 제출된 현장 활동 사진만 — load_photo_reports()를
+    """해당 주(월~일, 기본값 이번주)에 제출된 현장 활동 사진만 — 구글폼 경로
+    (load_photo_reports)와 엑셀 일괄 등록 경로(load_bulk_photo_reports)를 합쳐서
     그 주로 거른다.
 
     다른 주 사진이 섞여 들어가면 안 되므로(예: 지사가 이번주에 아직 사진을 안
@@ -1096,13 +1226,19 @@ def weekly_photo_reports(week_start: pd.Timestamp | None = None) -> pd.DataFrame
     보고서 사진 고르기·인쇄 보고서 자체를 전부 이 함수로 통일한다. week_start를
     주면 그 주(과거 포함)만, 안 주면 이번주만 돌려준다(주차별 보고서 다시 뽑기용).
     """
-    photos = load_photo_reports()
+    form_photos = load_photo_reports()
+    bulk_photos = load_bulk_photo_reports()
+    cols = ["branch", "photo_url", "timestamp"]
+    photos = pd.concat([form_photos[cols] if not form_photos.empty else pd.DataFrame(columns=cols),
+                         bulk_photos[cols] if not bulk_photos.empty else pd.DataFrame(columns=cols)],
+                        ignore_index=True)
     if photos.empty:
         return photos
     if week_start is None:
         _, week_start = this_and_last_week()
     start, end = _week_range(week_start)
-    return photos[(photos["timestamp"] >= start) & (photos["timestamp"] < end)].reset_index(drop=True)
+    mask = (photos["timestamp"] >= start) & (photos["timestamp"] < end)
+    return photos[mask].sort_values("timestamp", ascending=False).reset_index(drop=True)
 
 
 def _alert_counts_for_weeks(notif: pd.DataFrame, weeks: list[pd.Timestamp]) -> pd.DataFrame:

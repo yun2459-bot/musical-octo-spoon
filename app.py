@@ -1348,6 +1348,46 @@ with tab4:
                         notif.sort_values("sent_at", ascending=False)[["branch", "site", "level", "apparent_temp", "sent_at", "status"]],
                         width="stretch", hide_index=True)
 
+                    st.markdown("---")
+                    st.markdown("##### 🚀 지금 발송 (파일럿 · 수동)")
+                    st.caption("자동 발송은 아직 꺼져 있습니다 — 담당자가 버튼을 직접 눌러야만 실제 "
+                               "문자가 나갑니다. 시연·검증이 끝나면 자동 발송으로 전환할 수 있습니다.")
+                    if not HW.solapi_configured():
+                        st.info("Solapi 연동 정보(API Key/Secret/발신번호)가 secrets에 아직 없어 "
+                                "발송 기능이 꺼져 있습니다.")
+                    else:
+                        _send_branches = HW.branches_with_recipients()
+                        if not _send_branches:
+                            st.info("담당자 연락처가 등록된 지사가 아직 없습니다 — secrets.toml의 "
+                                     "[recipients]에 지사별 담당자를 추가해주세요.")
+                        else:
+                            _send_branch = st.selectbox("지사 선택", _send_branches, key="_send_branch")
+                            _recipients = HW.get_recipients(_send_branch)
+                            st.caption(f"수신자 {len(_recipients)}명: " +
+                                       ", ".join(f"{r['name']}({r['phone']})" for r in _recipients))
+
+                            _branch_notif = notif[notif["branch"] == _send_branch].sort_values(
+                                "sent_at", ascending=False)
+                            if _branch_notif.empty:
+                                _default_msg = f"[{_send_branch}] 온열질환 예방 안내 (파일럿 시연용)"
+                            else:
+                                _latest = _branch_notif.iloc[0]
+                                _default_msg = HW.build_alert_message(
+                                    _send_branch, _latest["level"], _latest["apparent_temp"], _latest["sent_at"])
+
+                            _msg = st.text_area("발송 내용 (필요하면 수정 가능)", value=_default_msg,
+                                                 height=110, key=f"_send_msg_{_send_branch}")
+                            if st.button(f"🚀 {_send_branch} 지사 담당자 {len(_recipients)}명에게 지금 발송",
+                                          type="primary", width="stretch"):
+                                with st.spinner("발송 중..."):
+                                    _send_result = HW.send_alert_sms(_send_branch, _msg)
+                                if _send_result["sent"]:
+                                    st.success("✅ 발송 완료: " + ", ".join(
+                                        f"{s['name']}({s['phone']})" for s in _send_result["sent"]))
+                                if _send_result["failed"]:
+                                    st.error("❌ 발송 실패: " + " / ".join(
+                                        f"{f['name']}: {f['reason']}" for f in _send_result["failed"]))
+
 # ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트
 # 폭염 대응(tab4) 블록을 분석 탭보다 먼저 그린다 — 잠겨 있을 때 st.stop()으로 이후
 # 실행을 멈춰도 운영 화면인 폭염 탭은 이미 렌더링돼 정상 동작하게 하기 위함이다.

@@ -11,9 +11,13 @@ sync_heatwave_data.py를 실행해 원본을 이 폴더로 복사한 뒤 git com
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import math
 import re
 import sqlite3
+import time
+import uuid
 from datetime import timedelta, timezone
 from pathlib import Path
 
@@ -1153,6 +1157,97 @@ def submit_bulk_photos(rows: list[dict]) -> dict:
                           f"엑셀 일괄 등록: 활동사진 {len(new_records)}건 추가", sha=sha)
 
     return {"success": ok, "errors": errors}
+
+
+# ------------------------------------------------------------------ 수동 문자 발송(파일럿)
+# 폭염 경보 문자를 자동으로 매 주기 보내는 건 아직 안 켰다(사고 위험 — 우선 사람이
+# "발송" 버튼을 눌러야만 실제로 나가는 수동 방식으로 파일럿 시연부터 한다는 결정,
+# 2026-08-06). 발신은 솔라피(Solapi) SMS — 카카오 알림톡과 달리 채널 심사 없이
+# 발신번호 사전등록만으로 바로 쓸 수 있어 파일럿에 적합.
+#
+# 지사별 담당자 연락처(recipients)는 st.secrets에 넣는다 — sites.yaml에 넣으면
+# sync_heatwave_data.py가 이 public 저장소로 그대로 복사할 위험이 있어(2026-08-06
+# 실제로 겪은 사고, 다행히 배포 전에 막음) 절대 안 된다. secrets.toml은 git에
+# 안 올라가므로 여기가 유일하게 안전한 자리다.
+
+
+def solapi_configured() -> bool:
+    """SOLAPI_API_KEY/SECRET/SENDER_PHONE이 secrets에 다 있으면 True."""
+    try:
+        s = st.secrets
+        return bool(s.get("SOLAPI_API_KEY") and s.get("SOLAPI_API_SECRET") and s.get("SOLAPI_SENDER_PHONE"))
+    except Exception:
+        return False
+
+
+def branches_with_recipients() -> list[str]:
+    """secrets.toml의 [recipients] 테이블에 담당자가 1명 이상 등록된 지사 목록."""
+    try:
+        recipients = st.secrets.get("recipients", {})
+    except Exception:
+        return []
+    return [b for b, people in recipients.items() if people]
+
+
+def get_recipients(branch: str) -> list[dict]:
+    """그 지사의 담당자 목록([{name, phone}, ...]) — secrets에 없으면 빈 리스트."""
+    try:
+        recipients = st.secrets.get("recipients", {})
+    except Exception:
+        return []
+    return list(recipients.get(branch, []))
+
+
+def build_alert_message(branch: str, level: str, apparent_temp: float, observed_at) -> str:
+    """실제 자동 발송(온도를 조져보자/main.py)과 같은 형식의 문자 본문을 만든다."""
+    action = {
+        "주의": "2시간 연속 작업 시 20분 휴식 / 2시간 단위 체감온도 측정.",
+        "경고": "1시간 연속 작업 시 10분 이상 휴식 권고 / 안전관리자·지사장 현장 순회점검.",
+        "위험": "지사장 현장안전확인 및 작업여부 판단 / 민감군(질환 경험, 신규자) 등 작업 제외.",
+    }.get(level, "")
+    ts = pd.Timestamp(observed_at).strftime("%Y-%m-%d %H:%M") if pd.notna(observed_at) else "-"
+    return (f"[{branch}] {level} 단계 (체감온도 {apparent_temp:.1f}°C)\n"
+            f"{action}\n관측시각: {ts}")
+
+
+def send_alert_sms(branch: str, message: str) -> dict:
+    """그 지사에 등록된 담당자 전원에게 실제 SMS를 보낸다(파일럿 수동 발송).
+
+    반환: {"sent": [{"name":...,"phone":...}], "failed": [{"name":...,"phone":...,"reason":...}]}.
+    담당자가 한 명도 없거나 자격증명이 없으면 즉시 빈 결과로 돌아간다(호출부가
+    이유를 판단해 안내 문구를 보여준다).
+    """
+    result = {"sent": [], "failed": []}
+    if not solapi_configured():
+        return result
+    recipients = get_recipients(branch)
+    if not recipients:
+        return result
+
+    api_key = st.secrets["SOLAPI_API_KEY"]
+    api_secret = st.secrets["SOLAPI_API_SECRET"]
+    sender = st.secrets["SOLAPI_SENDER_PHONE"]
+
+    for person in recipients:
+        name, phone = person.get("name", ""), person.get("phone", "")
+        date = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        salt = uuid.uuid4().hex
+        signature = hmac.new(api_secret.encode(), (date + salt).encode(), hashlib.sha256).hexdigest()
+        headers = {
+            "Authorization": f"HMAC-SHA256 apiKey={api_key}, date={date}, salt={salt}, signature={signature}",
+            "Content-Type": "application/json",
+        }
+        body = {"message": {"to": phone.replace("-", ""), "from": sender.replace("-", ""), "text": message}}
+        try:
+            resp = requests.post("https://api.solapi.com/messages/v4/send", json=body,
+                                  headers=headers, timeout=10)
+            if resp.status_code < 300:
+                result["sent"].append({"name": name, "phone": phone})
+            else:
+                result["failed"].append({"name": name, "phone": phone, "reason": f"{resp.status_code} {resp.text[:200]}"})
+        except Exception as exc:
+            result["failed"].append({"name": name, "phone": phone, "reason": str(exc)})
+    return result
 
 
 # 캐러셀·인쇄 보고서 사진 고르기에 실제로 그리는 지사별 사진 수 상한 — 시즌 내내

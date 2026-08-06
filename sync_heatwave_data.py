@@ -7,6 +7,7 @@ git add/commit/push 하면 클라우드에도 최신 값이 반영된다(Streaml
 """
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -22,19 +23,33 @@ FILES = [
     SOURCE / "Map_of_South_Korea-blank.svg",
 ]
 
+# 010-1234-5678 / 01012345678 등 휴대폰번호로 보이는 패턴 — sites.yaml을 이 public
+# 저장소로 복사하기 직전 마지막 안전장치로 쓴다. 지금은 recipients 필드 하나만
+# 걸러내면 되지만, 나중에 다른 개인정보 필드가 실수로 추가돼도(예: 필드명을 빼먹고
+# 커밋) 이 스캔이 잡아내도록 필드명이 아니라 "패턴 자체"를 검사한다.
+_PHONE_PATTERN = re.compile(r"01[016789]-?\d{3,4}-?\d{4}")
+
 
 def _sync_sites_yaml_without_recipients(src: Path, dst: Path) -> None:
     """sites.yaml은 지사별 담당자 이름·휴대폰번호(recipients)를 담고 있어 원본 그대로
     복사하면 안 된다 — 이 저장소(나무발발이)는 public GitHub라, 그대로 커밋되면 개인
     연락처가 그대로 공개된다(2026-08-06, 경인 지사 3명 등록 직후 발견해 긴급 수정).
-    recipients 필드를 뺀 사본만 만들어 커밋한다.
+    recipients 필드를 뺀 사본만 만들고, 그래도 휴대폰번호 패턴이 남아있으면(다른
+    필드에 실수로 개인정보가 들어간 경우 등) 아예 파일을 쓰지 않고 중단한다.
     """
     with open(src, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     for branch in data.get("branches", []):
         branch.pop("recipients", None)
+    output = yaml.dump(data, allow_unicode=True, sort_keys=False)
+    if _PHONE_PATTERN.search(output):
+        raise RuntimeError(
+            "sites.yaml에서 recipients를 뺀 뒤에도 휴대폰번호로 보이는 패턴이 남아있어 "
+            "동기화를 중단합니다 — 개인정보가 public 저장소에 올라갈 위험이 있습니다. "
+            "원본에 새로 추가된 개인정보 필드가 있는지 확인해주세요."
+        )
     with open(dst, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, allow_unicode=True, sort_keys=False)
+        f.write(output)
 
 
 def main() -> None:

@@ -367,6 +367,37 @@ def this_and_last_week() -> tuple[pd.Timestamp, pd.Timestamp]:
     return this_week - pd.Timedelta(days=7), this_week
 
 
+def _week_range(week_start: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """[week_start, week_start+7일) 반개구간 — 그 주 월요일 0시부터 다음주 월요일
+    0시 직전까지. 과거 특정 주차를 조회할 때 다음주 데이터까지 섞여 들어가지 않게
+    상한을 명시적으로 둔다(이번주 조회는 어차피 미래 데이터가 없어 상한이 없어도
+    결과가 같았지만, 과거 주차는 상한이 없으면 그 뒤 모든 주가 다 포함돼버린다)."""
+    return week_start, week_start + pd.Timedelta(days=7)
+
+
+def available_report_weeks() -> list[pd.Timestamp]:
+    """온열질환 예방 시즌 시작(6/1)부터 이번주까지, 보고서를 다시 뽑을 수 있는 주차
+    월요일 목록 — 최신순(이번주가 맨 앞). 주차 선택 드롭다운에 쓴다.
+    """
+    _, this_week = this_and_last_week()
+    season_start = _week_start(pd.Timestamp(this_week.year, *SEASON_START_MD))
+    weeks = []
+    wk = this_week
+    while wk >= season_start:
+        weeks.append(wk)
+        wk = wk - pd.Timedelta(days=7)
+    return weeks
+
+
+def week_label(week_start: pd.Timestamp) -> str:
+    """주차 선택 드롭다운에 쓰는 사람이 읽는 라벨 — "8월 3일~8월 7일(이번주)" 형태."""
+    _, this_week = this_and_last_week()
+    week_end = week_start + pd.Timedelta(days=4)  # 월~금 근무 주간 기준 표기
+    tag = " (이번주)" if week_start == this_week else \
+        " (지난주)" if week_start == this_week - pd.Timedelta(days=7) else ""
+    return f"{week_start.month}월 {week_start.day}일 ~ {week_end.month}월 {week_end.day}일{tag}"
+
+
 def weekly_max_by_branch(obs: pd.DataFrame) -> pd.DataFrame:
     """지사별 주차(월요일 시작) 최고 체감온도 — 지난주/이번주 두 칸만 고정으로 보여준다.
 
@@ -664,7 +695,7 @@ def load_patient_reports_raw() -> pd.DataFrame | None:
     return df.sort_values("timestamp")[["branch", "환자수", "증상", "상세", "timestamp"]]
 
 
-def patient_event_summary() -> dict:
+def patient_event_summary(week_start: pd.Timestamp | None = None) -> dict:
     """온열질환 발생 즉시 보고 기준 환자 수: 올해 누적 / 이번주 / 금일.
 
     주차별 폼의 자기보고(patient_summary)와 달리 사건 단위 기록이라 이 값이 공식
@@ -674,33 +705,44 @@ def patient_event_summary() -> dict:
     if raw is None or raw.empty:
         return {"cumulative": 0, "this_week": 0, "today": 0}
     now = now_kst()
-    _, this_week = this_and_last_week()
-    year = raw[raw["timestamp"].dt.year == now.year]
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
+    # 과거 주차 보고서를 다시 뽑을 때 "누적"은 오늘까지가 아니라 "그 주가 끝나는
+    # 시점까지"를 의미해야 그때 실제로 보고된 값과 일치한다.
+    year = raw[raw["timestamp"].dt.year == week_start.year]
+    cumulative_through_week = year[year["timestamp"] < end]
+    is_current_week = week_start == this_and_last_week()[1]
     return {
-        "cumulative": int(year["환자수"].sum()),
-        "this_week": int(year.loc[year["timestamp"] >= this_week, "환자수"].sum()),
-        "today": int(year.loc[year["timestamp"].dt.normalize() == now.normalize(), "환자수"].sum()),
+        "cumulative": int(cumulative_through_week["환자수"].sum()),
+        "this_week": int(year.loc[(year["timestamp"] >= start) & (year["timestamp"] < end), "환자수"].sum()),
+        "today": (int(year.loc[year["timestamp"].dt.normalize() == now.normalize(), "환자수"].sum())
+                  if is_current_week else 0),
     }
 
 
-def weekly_patient_events() -> pd.DataFrame:
-    """이번주 접수된 온열질환 발생 보고 전체 — 최신순(인쇄 보고서/화면 카드용)."""
+def weekly_patient_events(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
+    """해당 주(기본값 이번주) 접수된 온열질환 발생 보고 전체 — 최신순(인쇄 보고서/화면
+    카드용). week_start를 주면 그 주(과거 포함)만 돌려준다."""
     cols = ["branch", "환자수", "증상", "상세", "timestamp"]
     raw = load_patient_reports_raw()
     if raw is None or raw.empty:
         return pd.DataFrame(columns=cols)
-    _, this_week = this_and_last_week()
-    return raw[raw["timestamp"] >= this_week][cols].sort_values("timestamp", ascending=False)
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
+    mask = (raw["timestamp"] >= start) & (raw["timestamp"] < end)
+    return raw[mask][cols].sort_values("timestamp", ascending=False)
 
 
-def patient_report_mismatch() -> pd.DataFrame:
+def patient_report_mismatch(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
     """지사별 [즉시보고 환자수] vs [주차별 폼 자기보고 환자수] 차이 — 누락 지사 추적용.
 
     두 숫자가 다르면 그 지사가 둘 중 하나를 빠뜨렸다는 뜻이라, 어디를 확인해야
     하는지 바로 알 수 있다. 차이가 없는 지사는 반환하지 않는다.
     """
-    events = weekly_patient_events()
-    weekly = weekly_incident_totals()
+    events = weekly_patient_events(week_start)
+    weekly = weekly_incident_totals(week_start)
     ev = (events.groupby("branch", as_index=False)["환자수"].sum()
           .rename(columns={"환자수": "즉시보고"}) if not events.empty
           else pd.DataFrame(columns=["branch", "즉시보고"]))
@@ -806,8 +848,9 @@ def today_stoppages() -> pd.DataFrame:
     return today_rows[cols]
 
 
-def weekly_stoppage_reports() -> pd.DataFrame:
-    """이번주(월요일~오늘) 제출된 작업 조정·중지 즉시 보고 전체(두 구분 모두) — 최신순.
+def weekly_stoppage_reports(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
+    """해당 주(기본값 이번주) 제출된 작업 조정·중지 즉시 보고 전체(두 구분 모두) —
+    최신순. week_start를 주면 그 주(과거 포함)만 돌려준다.
 
     인쇄용 주간 보고서에서 쓴다 — "옥외 작업 중지" 절은 구분이 "작업 중지"인 행만
     걸러서 사용한다.
@@ -816,19 +859,22 @@ def weekly_stoppage_reports() -> pd.DataFrame:
     raw = load_stoppage_reports_raw()
     if raw is None or raw.empty:
         return pd.DataFrame(columns=cols)
-    _, this_week = this_and_last_week()
-    week_rows = raw[raw["timestamp"] >= this_week]
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
+    week_rows = raw[(raw["timestamp"] >= start) & (raw["timestamp"] < end)]
     return week_rows[cols].sort_values("timestamp", ascending=False)
 
 
-def weekly_incident_totals() -> pd.DataFrame:
-    """지사별 이번주(월요일~오늘) 누적 온열질환·조치 현황.
+def weekly_incident_totals(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
+    """지사별 해당 주(기본값 이번주) 누적 온열질환·조치 현황. week_start를 주면
+    그 주(과거 포함)만 집계한다.
 
     환자수/작업조정은 구글폼 문항이 "금주 신규"(응답자는 그때까지 파악한 신규분만
     입력, 누적 계산은 하지 않음)이므로 지사·일자별 마지막 제출값을 그날의 대표값으로
-    쓴 뒤(하루 중복 제출 방지) 이번주 날짜들의 대표값을 합산한다 — 응답자가 아니라
+    쓴 뒤(하루 중복 제출 방지) 그 주 날짜들의 대표값을 합산한다 — 응답자가 아니라
     이 함수가 주간 누적을 계산한다. 작업중지는 별도 "작업중지 즉시 보고" 폼에서
-    사건 1건당 1행으로 들어오므로 그냥 이번주 행 개수를 센다. 중지상세(자유서술)는
+    사건 1건당 1행으로 들어오므로 그냥 그 주 행 개수를 센다. 중지상세(자유서술)는
     주 단위로 합쳐서 보여줄 방법이 마땅치 않아 이 집계에서는 제외한다 — 상세 내용이
     필요하면 weekly_stoppage_reports()를 직접 확인한다.
     """
@@ -840,12 +886,14 @@ def weekly_incident_totals() -> pd.DataFrame:
     base = pd.DataFrame({"branch": branches, "환자수": 0, "작업조정": 0, "작업중지": 0,
                           "최근제출": pd.NaT})
 
-    _, this_week = this_and_last_week()
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
 
     raw = load_incident_reports_raw()
     incident_agg = pd.DataFrame(columns=["branch", "환자수", "작업조정", "최근제출"])
     if raw is not None and not raw.empty:
-        week_rows = raw[raw["timestamp"] >= this_week].copy()
+        week_rows = raw[(raw["timestamp"] >= start) & (raw["timestamp"] < end)].copy()
         if not week_rows.empty:
             week_rows["date"] = week_rows["timestamp"].dt.normalize()
             daily_last = week_rows.sort_values("timestamp").groupby(["branch", "date"], as_index=False).last()
@@ -855,7 +903,7 @@ def weekly_incident_totals() -> pd.DataFrame:
             incident_agg = daily_last.groupby("branch", as_index=False).agg(
                 환자수=("환자수", "sum"), 작업조정=("작업조정", "sum"), 최근제출=("timestamp", "max"))
 
-    stoppages = weekly_stoppage_reports()
+    stoppages = weekly_stoppage_reports(week_start)
     stoppage_agg = pd.DataFrame(columns=["branch", "작업중지", "최근제출_중지"])
     if not stoppages.empty:
         # "작업중지" 컬럼은 옥외 작업 중지만 센다(같은 폼의 "작업 조정" 유형은 온열질환
@@ -898,12 +946,13 @@ CHECKLIST_OK = {
 }
 
 
-def weekly_checklist() -> pd.DataFrame:
-    """지사별 이번주 온열질환 예방 점검 결과 — 5개 항목 최신 제출값 + 특이사항.
+def weekly_checklist(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
+    """지사별 해당 주(기본값 이번주) 온열질환 예방 점검 결과 — 5개 항목 최신 제출값 +
+    특이사항. week_start를 주면 그 주(과거 포함)만 집계한다.
 
     체크리스트 문항은 "제출 시점 기준 현재 상태"를 묻는 객관식이라(예: 상시 비치·보충
-    정상 / 부족 등) 날짜별로 합산할 수 있는 값이 아니다 — 이번주 안에서 가장 최근
-    제출값만 그 지사의 대표값으로 쓴다. 같은 지사에서 이번주 여러 명이 각자 제출했을
+    정상 / 부족 등) 날짜별로 합산할 수 있는 값이 아니다 — 그 주 안에서 가장 최근
+    제출값만 그 지사의 대표값으로 쓴다. 같은 지사에서 그 주 여러 명이 각자 제출했을
     수도 있으므로(응답자 구분 문항이 없어 누가 냈는지는 알 수 없다) "제출횟수"를 같이
     보여준다 — 1보다 크면 최근 값 하나만 대표로 쓰고 있다는 걸 알아챌 수 있게.
     """
@@ -919,8 +968,10 @@ def weekly_checklist() -> pd.DataFrame:
     if raw is None or raw.empty:
         return base[cols]
 
-    _, this_week = this_and_last_week()
-    week_rows = raw[raw["timestamp"] >= this_week].copy()
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
+    week_rows = raw[(raw["timestamp"] >= start) & (raw["timestamp"] < end)].copy()
     if week_rows.empty:
         return base[cols]
 
@@ -1036,68 +1087,98 @@ def load_photo_reports() -> pd.DataFrame:
             .reset_index(drop=True))
 
 
-def weekly_photo_reports() -> pd.DataFrame:
-    """이번주(월요일~오늘) 제출된 현장 활동 사진만 — load_photo_reports()를 이번주로 거른다.
+def weekly_photo_reports(week_start: pd.Timestamp | None = None) -> pd.DataFrame:
+    """해당 주(월~일, 기본값 이번주)에 제출된 현장 활동 사진만 — load_photo_reports()를
+    그 주로 거른다.
 
-    지난주 이전 사진이 "이번주 활동사진"에 섞여 들어가면 안 되므로(예: 지사가 이번주에
-    아직 사진을 안 올렸는데 지난주 사진이 최신값으로 잡혀 보고서에 실리는 사고),
-    캐러셀·인쇄 보고서 사진 고르기·인쇄 보고서 자체를 전부 이 함수로 통일한다.
+    다른 주 사진이 섞여 들어가면 안 되므로(예: 지사가 이번주에 아직 사진을 안
+    올렸는데 지난주 사진이 최신값으로 잡혀 보고서에 실리는 사고), 캐러셀·인쇄
+    보고서 사진 고르기·인쇄 보고서 자체를 전부 이 함수로 통일한다. week_start를
+    주면 그 주(과거 포함)만, 안 주면 이번주만 돌려준다(주차별 보고서 다시 뽑기용).
     """
     photos = load_photo_reports()
     if photos.empty:
         return photos
-    _, this_week = this_and_last_week()
-    return photos[photos["timestamp"] >= this_week].reset_index(drop=True)
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
+    return photos[(photos["timestamp"] >= start) & (photos["timestamp"] < end)].reset_index(drop=True)
 
 
-def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
-    """지사별 주차별 경보 발령 건수 — 지난주/이번주 두 칸을 항상 고정으로 보여준다.
-
-    이번주에 발령이 하나도 없어도(정상적인 상태) 오른쪽 패널이 아예 안 뜨는 대신
-    빈 패널로라도 뜨도록, 그 주차에 0건짜리 더미 행을 하나 채워 넣는다.
+def _alert_counts_for_weeks(notif: pd.DataFrame, weeks: list[pd.Timestamp]) -> pd.DataFrame:
+    """주어진 주차들(월요일 목록)에 대해 지사별 경보 발령 건수를 계산하는 공통 로직.
 
     notifications 테이블은 지사 내 도시(site) 단위·재발송(resend) 단위로 행이 쌓여서,
     같은 지사가 같은 날 도시 여러 곳(예: 전북의 군산/전주/완주)에서 동시에 특보가
     뜨면 그만큼 중복 집계됐다. 지사·단계·일자 기준으로 먼저 중복 제거해 "지사 단위로
     하루 1건"만 세도록 한다(날짜가 다르면 별개 건으로 유지).
     """
-    last_week, this_week = this_and_last_week()
-
     if not notif.empty:
         d = notif.copy()
         d["week"] = pd.to_datetime(d["sent_at"]).apply(_week_start)
-        d = d[d["week"].isin([last_week, this_week])]
+        d = d[d["week"].isin(weeks)]
         d["date"] = pd.to_datetime(d["sent_at"]).dt.date
         d = d.drop_duplicates(subset=["week", "branch", "level", "date"])
         out = d.groupby(["week", "branch", "level"], as_index=False).size().rename(columns={"size": "발령횟수"})
     else:
         out = pd.DataFrame(columns=["week", "branch", "level", "발령횟수"])
 
-    for wk in (last_week, this_week):
+    for wk in weeks:
         if wk not in out["week"].values:
             out = pd.concat([out, pd.DataFrame([{
                 "week": wk, "branch": "", "level": LEVEL_ORDER[0], "발령횟수": 0,
             }])], ignore_index=True)
+    return out
 
+
+def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
+    """지사별 주차별 경보 발령 건수 — 지난주/이번주 두 칸을 항상 고정으로 보여준다
+    (화면 차트 전용, 항상 오늘 기준 최근 두 주).
+    """
+    last_week, this_week = this_and_last_week()
+    out = _alert_counts_for_weeks(notif, [last_week, this_week])
     out["주차"] = out["week"].map({last_week: "지난주", this_week: "이번주"})
     return out
 
 
-def weekly_top_alert_branch() -> dict | None:
-    """이번주 폭염특보 단계가 가장 높았던 지사 — 동률(같은 단계)이면 그 단계 발령
-    횟수(weekly_alert_counts_by_branch 기준, 지사·단계·일자 중복 제거된 값)가
-    더 많은 지사를 고른다. 이번주 발령이 하나도 없으면 None.
+def weekly_top_alert_branch(week_start: pd.Timestamp | None = None) -> dict | None:
+    """해당 주(기본값 이번주) 폭염특보 단계가 가장 높았던 지사 — 동률(같은 단계)이면
+    그 단계 발령 횟수(지사·단계·일자 중복 제거된 값)가 더 많은 지사를 고른다.
+    그 주 발령이 하나도 없으면 None.
     """
+    if week_start is None:
+        _, week_start = this_and_last_week()
     notif = load_notifications()
-    weekly = weekly_alert_counts_by_branch(notif)
-    weekly = weekly[(weekly["주차"] == "이번주") & (weekly["branch"] != "")]
+    weekly = _alert_counts_for_weeks(notif, [week_start])
+    weekly = weekly[weekly["branch"] != ""]
     if weekly.empty:
         return None
     level_rank = {lvl: i for i, lvl in enumerate(LEVEL_ORDER)}
     weekly = weekly.copy()
     weekly["_rank"] = weekly["level"].map(level_rank)
-    # 한 지사가 이번주에 여러 단계를 겪었을 수 있으니, 지사별로 가장 높은 단계
+    # 한 지사가 그 주에 여러 단계를 겪었을 수 있으니, 지사별로 가장 높은 단계
     # 행만 남긴 뒤 그 지사들끼리 단계→횟수 순으로 비교한다.
     top_per_branch = weekly.loc[weekly.groupby("branch")["_rank"].idxmax()]
     top = top_per_branch.sort_values(["_rank", "발령횟수"], ascending=[False, False]).iloc[0]
     return {"branch": top["branch"], "level": top["level"], "count": int(top["발령횟수"])}
+
+
+def week_top_temp_branch(obs: pd.DataFrame, week_start: pd.Timestamp | None = None) -> dict | None:
+    """해당 주(기본값 이번주) 최고 체감온도를 기록한 지사 — 인쇄 보고서 "주간 최고
+    온도 사업장" 칸용. 그 주 관측이 하나도 없으면 None.
+    """
+    if obs.empty:
+        return None
+    if week_start is None:
+        _, week_start = this_and_last_week()
+    start, end = _week_range(week_start)
+    dmax = daily_max_by_branch(obs)
+    if dmax.empty:
+        return None
+    dmax = dmax.copy()
+    dmax["date_ts"] = pd.to_datetime(dmax["date"])
+    wk = dmax[(dmax["date_ts"] >= start) & (dmax["date_ts"] < end) & dmax["apparent_temp"].notna()]
+    if wk.empty:
+        return None
+    top = wk.loc[wk["apparent_temp"].idxmax()]
+    return {"branch": top["branch"], "apparent_temp": top["apparent_temp"]}

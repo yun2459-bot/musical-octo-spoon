@@ -47,28 +47,32 @@ def _branch_form_url(branch: str) -> str:
     return f"{_FORM_BASE_URL}?usp=pp_url&entry.996594318={quote(branch)}"
 
 
-def _print_report_html() -> str:
+def _print_report_html(week_start: pd.Timestamp | None = None) -> str:
     """주간 CSO·임원진 보고용 인쇄 리포트 본문 HTML.
 
     2페이지 구성 — 1p: 전체 현황 / 옥외 작업 중지 지사·상세 이유 / 주간 예방 점검
     결과(지사별), 2p: 지사별 활동 사진 1장씩. CSS의 page-break로 페이지를 나눈다.
-    """
-    esum = HW.patient_event_summary()
-    obs = HW.load_observations()
-    wmax = HW.weekly_max_by_branch(obs) if not obs.empty else pd.DataFrame()
-    week_top = None
-    if not wmax.empty:
-        wk = wmax[(wmax["주차"] == "이번주") & wmax["apparent_temp"].notna()]
-        if not wk.empty:
-            week_top = wk.loc[wk["apparent_temp"].idxmax()]
 
-    stoppages = HW.weekly_stoppage_reports()
-    checklist = HW.weekly_checklist()
-    # 보고서에 넣을 사진은 기본적으로 지사별 이번주 최신 1장이지만, 화면에서 직접 고른
+    week_start(그 주 월요일)를 주면 그 주(과거 포함) 기준으로 다시 뽑고, 안 주면
+    이번주 기준(기본 동작)이다 — CSO/대표가 지난주 보고서를 다시 요청할 때를
+    대비해 모든 데이터를 주차 단위로 다시 계산할 수 있게 해둔 것.
+    """
+    if week_start is None:
+        _, week_start = HW.this_and_last_week()
+
+    esum = HW.patient_event_summary(week_start)
+    obs = HW.load_observations()
+    week_top = HW.week_top_temp_branch(obs, week_start)
+
+    stoppages = HW.weekly_stoppage_reports(week_start)
+    checklist = HW.weekly_checklist(week_start)
+    # 보고서에 넣을 사진은 기본적으로 지사별 그 주 최신 1장이지만, 화면에서 직접 고른
     # 사진이 있으면 그것을 우선한다(st.session_state["_report_photo_pick"]: {지사: photo_url}).
-    # 지난주 이전 사진은 weekly_photo_reports()가 걸러내므로 "이번주 활동사진"에
-    # 섞여 들어가지 않는다.
-    photos = HW.weekly_photo_reports()
+    # 다른 주 사진은 weekly_photo_reports()가 걸러내므로 섞여 들어가지 않는다. 사진
+    # 직접 고르기는 화면에 보이는 이번주 캐러셀 기준이라, 과거 주차 재출력 시에는
+    # (그 주에 직접 고른 사진이 세션에 남아있을 리 없으므로) 자연히 그 주 최신 사진이
+    # 쓰인다.
+    photos = HW.weekly_photo_reports(week_start)
     picks = st.session_state.get("_report_photo_pick", {})
     if photos.empty:
         photo_by_branch = photos
@@ -79,28 +83,27 @@ def _print_report_html() -> str:
         # 고른 지사는 chosen 행으로, 나머지는 최신 행으로 채운다.
         photo_by_branch = pd.concat(
             [chosen, latest[~latest["branch"].isin(chosen["branch"])]], ignore_index=True)
-    _, this_week = HW.this_and_last_week()
-    week_end = this_week + pd.Timedelta(days=4)  # 월~금 근무 주간 기준
-    period_label = f"{this_week.month}월 {this_week.day}일 ~ {week_end.month}월 {week_end.day}일"
+    week_end = week_start + pd.Timedelta(days=4)  # 월~금 근무 주간 기준
+    period_label = f"{week_start.month}월 {week_start.day}일 ~ {week_end.month}월 {week_end.day}일"
 
     top_line = (f"{week_top['branch']} · {week_top['apparent_temp']:.1f}℃" if week_top is not None
                 else "관측 데이터 없음")
-    top_alert = HW.weekly_top_alert_branch()
+    top_alert = HW.weekly_top_alert_branch(week_start)
     top_alert_line = (f"{top_alert['branch']} · {HW.level_label(top_alert['level'])} 단계 "
-                       f"({top_alert['count']}회)" if top_alert else "이번주 발령 없음")
+                       f"({top_alert['count']}회)" if top_alert else "해당 주 발령 없음")
     section1 = f"""
     <table class="rpt-table">
       <tr><th>누적 온열질환 발생 인원</th><td>{esum['cumulative']}명</td></tr>
-      <tr><th>이번주 온열질환 발생</th><td>{esum['this_week']}명</td></tr>
+      <tr><th>해당 주 온열질환 발생</th><td>{esum['this_week']}명</td></tr>
       <tr><th>주간 최고 온도 사업장</th><td>{html.escape(top_line)}</td></tr>
-      <tr><th>이번주 최고 폭염특보 단계 지사</th><td>{html.escape(top_alert_line)}</td></tr>
-      <tr><th>이번주 옥외 작업 중지</th><td>{len(stoppages)}건</td></tr>
+      <tr><th>해당 주 최고 폭염특보 단계 지사</th><td>{html.escape(top_alert_line)}</td></tr>
+      <tr><th>해당 주 옥외 작업 중지</th><td>{len(stoppages)}건</td></tr>
     </table>
     """
 
     stop_only = stoppages[stoppages["구분"].str.contains("중지", na=False)] if not stoppages.empty else stoppages
     if stop_only.empty:
-        section2 = '<p class="rpt-empty">이번주 작업중지 보고 없음</p>'
+        section2 = '<p class="rpt-empty">해당 주 작업중지 보고 없음</p>'
     else:
         rows2 = "".join(
             f"<tr><td>{html.escape(str(r.branch))}</td>"
@@ -110,9 +113,9 @@ def _print_report_html() -> str:
         )
         section2 = f'<table class="rpt-table"><tr><th>지사</th><th>제출시각</th><th>상세 이유</th></tr>{rows2}</table>'
 
-    events = HW.weekly_patient_events()
+    events = HW.weekly_patient_events(week_start)
     if events.empty:
-        section_pt = '<p class="rpt-empty">이번주 온열질환 발생 보고 없음</p>'
+        section_pt = '<p class="rpt-empty">해당 주 온열질환 발생 보고 없음</p>'
     else:
         rows_pt = "".join(
             f"<tr><td>{html.escape(str(r.branch))}</td>"
@@ -129,7 +132,7 @@ def _print_report_html() -> str:
                       f'{rows_pt}</table>')
         # 주간 자기보고와 숫자가 어긋나는 지사는 보고서에도 남겨, 회의 자리에서 바로
         # 누락 지사를 확인할 수 있게 한다.
-        mis = HW.patient_report_mismatch()
+        mis = HW.patient_report_mismatch(week_start)
         if not mis.empty:
             _t = ", ".join(f"{r.branch}(즉시 {r.즉시보고}명 / 주간 {r.주간보고}명)"
                            for r in mis.itertuples())
@@ -213,7 +216,7 @@ def _print_report_html() -> str:
       {section1}
       <h2>2. 옥외 작업 중지 지사 및 상세 이유</h2>
       {section2}
-      <h2>3. 이번주 온열질환 발생 보고 상세</h2>
+      <h2>3. 온열질환 발생 보고 상세</h2>
       {section_pt}
       <h2>4. 주간 온열질환 예방 확인 결과 (지사별)</h2>
       {section3}
@@ -222,12 +225,14 @@ def _print_report_html() -> str:
     """
 
 
-def _render_print_report_button() -> None:
+def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
     """새 창을 열어 인쇄 전용 HTML을 그린 뒤 브라우저 인쇄 대화상자를 띄우는 버튼.
 
     components.html은 iframe 안에서 렌더링되므로 그 안에서 window.print()를 부르면
     iframe 자신만 인쇄하려 들어 브라우저마다 동작이 들쭉날쭉하다 — 대신 새 창을 열어
     독립된 문서로 print()를 호출하면 항상 그 문서 하나만 인쇄된다.
+
+    week_start(그 주 월요일)를 주면 그 주 보고서를, 안 주면 이번주 보고서를 뽑는다.
     """
     css = """
     body { font-family: 'Malgun Gothic', 'SEBANG Gothic', sans-serif; color: #111; margin: 20px; }
@@ -274,7 +279,7 @@ def _render_print_report_button() -> None:
     @page { size: A4; margin: 14mm; }
     """
     full_html = f"<html><head><meta charset='utf-8'><title>주간 온열질환 예방 대응 보고서</title>" \
-                f"<style>{css}</style></head><body>{_print_report_html()}</body></html>"
+                f"<style>{css}</style></head><body>{_print_report_html(week_start)}</body></html>"
     doc_js = json.dumps(full_html).replace("</", "<\\/")
     button_html = f"""
     <button id="printReportBtn" style="padding:10px 18px; font-size:14px; font-weight:700;
@@ -524,7 +529,16 @@ with tab4:
                 st.error(f"⚠️ 지사 제출 데이터를 읽지 못하고 있습니다 — {_sheet_msg} "
                          "아래 표의 0은 '제출 없음'이 아니라 **연동 오류**일 수 있습니다.", icon="⚠️")
 
-            _render_print_report_button()
+            # CSO/대표가 지난주(또는 그 이전) 보고서를 다시 요청할 수 있어, 인쇄 시점의
+            # "이번주"가 아니라 원하는 주차를 직접 골라 그 주 데이터로 다시 뽑을 수 있게
+            # 한다 — 선택 안 하면 기본값(이번주)으로 지금까지와 동일하게 동작한다.
+            _report_weeks = HW.available_report_weeks()
+            _report_week_labels = [HW.week_label(w) for w in _report_weeks]
+            _report_week_idx = st.selectbox(
+                "🗓️ 인쇄할 보고서 주차", range(len(_report_weeks)),
+                format_func=lambda i: _report_week_labels[i], index=0,
+                help="기본값은 이번주입니다. 지난 주차를 고르면 그 주 데이터로 보고서를 다시 뽑습니다.")
+            _render_print_report_button(_report_weeks[_report_week_idx])
             st.markdown("---")
 
             clusters = HW.map_clusters(obs)

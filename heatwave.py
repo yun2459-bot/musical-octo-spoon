@@ -182,19 +182,30 @@ def _city_reading(latest: pd.DataFrame, branch: str, city: str) -> dict:
         official_advisory = row.get("official_advisory")
         if pd.isna(official_advisory):
             official_advisory = None
+        # 2026-08-06부터 관측지점(stn) 없는 도시(목포/당진/삼천포 등)는 온도를 조져보자
+        # 쪽 main.py가 최근접 실측값을 추정치로 이미 DB에 저장해서 보낸다 — is_estimate
+        # 컬럼이 없는(마이그레이션 전) 옛 스냅샷과의 호환을 위해 get으로 안전하게 읽는다.
+        is_estimate = bool(row.get("is_estimate", 0))
+        estimate_source = row.get("estimate_source") if is_estimate else None
+        if pd.isna(estimate_source):
+            estimate_source = None
         return {"apparent_temp": row["apparent_temp"], "level": row["level"],
-                "observed_at": row["observed_at"], "has_data": True, "is_estimate": False,
-                "estimate_source": None, "estimate_km": None, "official_advisory": official_advisory}
+                "observed_at": row["observed_at"], "has_data": True, "is_estimate": is_estimate,
+                "estimate_source": estimate_source, "estimate_km": None,
+                "official_advisory": official_advisory}
     return {"apparent_temp": None, "level": None, "observed_at": None, "has_data": False,
             "is_estimate": False, "estimate_source": None, "estimate_km": None, "official_advisory": None}
 
 
 def _data_points(cities: pd.DataFrame, latest: pd.DataFrame) -> list[dict]:
-    """실측값이 있는 모든 도시 목록(전 지사 통틀어) — 최근접 추정치 산출용."""
+    """실제 관측값(추정치 아님)이 있는 모든 도시 목록(전 지사 통틀어) — 최근접 추정치
+    산출용. 추정치를 후보에서 뺀다 — 안 그러면 추정치를 또 다른 도시가 빌려 쓰는
+    "추정의 추정" 체인이 생겨 원래 관측지와 점점 멀어진 값이 될 수 있다.
+    """
     points = []
     for r in cities.itertuples():
         reading = _city_reading(latest, r.branch, r.city)
-        if reading["has_data"]:
+        if reading["has_data"] and not reading["is_estimate"]:
             points.append({"branch": r.branch, "city": r.city, "lat": r.lat, "lon": r.lon, **reading})
     return points
 

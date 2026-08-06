@@ -614,7 +614,7 @@ with tab4:
 
                     map_html = f"""
                     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
-                    <div id="kakaoMap" style="width:100%; height:600px; border-radius:8px;"></div>
+                    <div id="kakaoMap" style="width:100%; height:1050px; border-radius:8px;"></div>
                     <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}&autoload=false"></script>
                     <script>
                     kakao.maps.load(function () {{
@@ -635,24 +635,28 @@ with tab4:
                             );
                             new kakao.maps.Marker({{position: pos, map: map, image: image, title: m.title}});
                         }});
+                        // 마커 bounds에 딱 맞추면 국토가 세로로 긴 형태라(경도 폭 < 위도 폭)
+                        // 가로로 넓은 컨테이너에서는 좌우로 바다만 넓게 남는다. 지도 높이를
+                        // 늘려(kakaoMap div height=900px) 세로 비율을 국토 형태에 가깝게
+                        // 맞춰 여백 없이 국토 위주로 채운다.
                         map.setBounds(bounds);
                     }});
                     </script>
                     """
-                    map_col, leg_col = st.columns([6, 1])
-                    with map_col:
-                        components.html(map_html, height=615, scrolling=False)
-                    with leg_col:
-                        for lvl, label in [(None, "정상"), ("주의", "주의 33℃+"),
-                                            ("경고", "경고 35℃+"), ("위험", "위험 38℃+")]:
-                            st.markdown(
-                                f'<div style="margin-bottom:6px; white-space:nowrap;">'
-                                f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-                                f'background:{HW.level_color(lvl)};margin-right:6px;"></span>{label}</div>',
-                                unsafe_allow_html=True)
-                        st.markdown(
-                            '<div style="font-size:12px; color:#666; margin-top:10px;">🚨 = 폭염특보 발생</div>',
-                            unsafe_allow_html=True)
+                    components.html(map_html, height=1065, scrolling=False)
+                    legend_items = [(None, "정상"), ("주의", "주의 33℃+"),
+                                     ("경고", "경고 35℃+"), ("위험", "위험 38℃+")]
+                    legend_html = "".join(
+                        f'<span style="display:inline-flex; align-items:center; margin-right:18px;">'
+                        f'<span style="display:inline-block; width:10px; height:10px; border-radius:50%; '
+                        f'background:{HW.level_color(lvl)}; margin-right:6px;"></span>{label}</span>'
+                        for lvl, label in legend_items
+                    )
+                    st.markdown(
+                        f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-top:6px;">'
+                        f'{legend_html}'
+                        f'<span style="font-size:12px; color:#666;">🚨 = 폭염특보 발생</span></div>',
+                        unsafe_allow_html=True)
 
                     latest_obs = obs["observed_at"].max() if not obs.empty else None
                     st.caption(
@@ -728,9 +732,11 @@ with tab4:
                     st.markdown(
                         '<table style="width:100%; border-collapse:collapse; text-align:center; '
                         'font-family:\'SEBANG Gothic\',sans-serif; margin-bottom:8px;">'
-                        f'<tr><th style="{th_style}">시즌 누적(06.01~09.30)</th>'
+                        f'<tr><th style="{th_style}">\'26년</th>'
+                        f'<th style="{th_style}">이번주</th>'
                         f'<th style="{th_style}">금일({today_label})</th></tr>'
                         f'<tr><td style="{td_style}">{ssum["season_cumulative"]}건</td>'
+                        f'<td style="{td_style}">{ssum["this_week"]}건</td>'
                         f'<td style="{td_style}">{ssum["today"]}건</td></tr>'
                         '</table>',
                         unsafe_allow_html=True,

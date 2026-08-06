@@ -761,7 +761,7 @@ def load_stoppage_reports_raw() -> pd.DataFrame | None:
 
 
 def stoppage_summary() -> dict:
-    """작업중지 보고 건수: 온열질환 예방 기간(6/1~9/30) 누적, 금일.
+    """작업중지 보고 건수: 온열질환 예방 기간(6/1~9/30) 누적('26년) · 이번주 · 금일 3단계.
 
     "작업 조정·중지 즉시 보고" 폼은 조정/중지 두 종류를 함께 받지만, 이 카드는
     옥외 작업 "중지"만 센다 — 사건 1건당 1회 제출이므로 건수 = 그 구분의 제출
@@ -769,13 +769,15 @@ def stoppage_summary() -> dict:
     """
     raw = load_stoppage_reports_raw()
     if raw is None or raw.empty:
-        return {"season_cumulative": 0, "today": 0}
+        return {"season_cumulative": 0, "this_week": 0, "today": 0}
     stop_only = raw[raw["구분"].str.contains("중지", na=False)]
     now = now_kst()
     start, end = _season_bounds(now.year)
     season_rows = stop_only[(stop_only["timestamp"] >= start) & (stop_only["timestamp"] <= end)]
-    today_rows = season_rows[season_rows["timestamp"].dt.normalize() == now.normalize()]
-    return {"season_cumulative": len(season_rows), "today": len(today_rows)}
+    _, this_week_start = this_and_last_week()
+    week_rows = season_rows[season_rows["timestamp"] >= this_week_start]
+    today_rows = week_rows[week_rows["timestamp"].dt.normalize() == now.normalize()]
+    return {"season_cumulative": len(season_rows), "this_week": len(week_rows), "today": len(today_rows)}
 
 
 def today_stoppages() -> pd.DataFrame:
@@ -1021,6 +1023,11 @@ def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
 
     이번주에 발령이 하나도 없어도(정상적인 상태) 오른쪽 패널이 아예 안 뜨는 대신
     빈 패널로라도 뜨도록, 그 주차에 0건짜리 더미 행을 하나 채워 넣는다.
+
+    notifications 테이블은 지사 내 도시(site) 단위·재발송(resend) 단위로 행이 쌓여서,
+    같은 지사가 같은 날 도시 여러 곳(예: 전북의 군산/전주/완주)에서 동시에 특보가
+    뜨면 그만큼 중복 집계됐다. 지사·단계·일자 기준으로 먼저 중복 제거해 "지사 단위로
+    하루 1건"만 세도록 한다(날짜가 다르면 별개 건으로 유지).
     """
     last_week, this_week = this_and_last_week()
 
@@ -1028,6 +1035,8 @@ def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:
         d = notif.copy()
         d["week"] = pd.to_datetime(d["sent_at"]).apply(_week_start)
         d = d[d["week"].isin([last_week, this_week])]
+        d["date"] = pd.to_datetime(d["sent_at"]).dt.date
+        d = d.drop_duplicates(subset=["week", "branch", "level", "date"])
         out = d.groupby(["week", "branch", "level"], as_index=False).size().rename(columns={"size": "발령횟수"})
     else:
         out = pd.DataFrame(columns=["week", "branch", "level", "발령횟수"])

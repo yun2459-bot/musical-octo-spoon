@@ -1,1 +1,0 @@
-PAT write test - safe to ignore

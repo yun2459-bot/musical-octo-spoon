@@ -145,13 +145,17 @@ def _print_report_html() -> str:
             return ""
 
         n_status = len(HW.CHECKLIST_FIELDS)
-        for r in checklist.itertuples():
+        for i, r in enumerate(checklist.itertuples()):
+            # 상태행 + (있으면) 특이사항행을 "지사 한 묶음"으로 보이게 지사마다 배경을
+            # 교대로 옅게 칠한다 — 묶음 구분이 없으니 특이사항행이 다음 지사 상태행과
+            # 이어 붙어 보여 복잡해 보인다는 피드백 반영.
+            grp = "grp-odd" if i % 2 else "grp-even"
             cells = "".join(
                 f'<td class="{_cell_class(f, str(getattr(r, f)))}">'
                 f'{html.escape(str(getattr(r, f)) or "-")}</td>'
                 for f in HW.CHECKLIST_FIELDS
             )
-            rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}</tr>")
+            rows3.append(f'<tr class="{grp}"><td>{html.escape(str(r.branch))}</td>{cells}</tr>')
             # 구글폼 자유서술 특이사항은 줄바꿈으로 구조화해 적는 경우가 많고(접수일자/
             # 신고내용/조치결과 등 항목별 줄) 길이도 제각각이라, 좁은 옆 칸에 욱여넣는
             # 대신 내용이 있는 지사만 그 아래 폭 전체를 쓰는 병합 행을 따로 붙인다
@@ -160,7 +164,7 @@ def _print_report_html() -> str:
             # 뭉개버리므로, <br>로 바꿔 원래 줄바꿈 구조를 인쇄물에도 그대로 살린다.
             note = html.escape(str(r.점검특이사항) or "").replace("\n", "<br>")
             if note.strip():
-                rows3.append(f'<tr class="rpt-note-row"><td class="rpt-note-label">특이사항</td>'
+                rows3.append(f'<tr class="{grp} rpt-note-row"><td class="rpt-note-label">특이사항</td>'
                              f'<td colspan="{n_status}">{note}</td></tr>')
         # 지사 칸은 좁게, 상태 5칸은 짧은 라벨만 담으니 균등하게 나머지 폭을 쓴다.
         status_w = 88 / n_status
@@ -234,10 +238,17 @@ def _render_print_report_button() -> None:
         word-break: keep-all; overflow-wrap: break-word; vertical-align: top; line-height: 1.5; }
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
     .rpt-table td.ok { background: #d9f2e3; color: #14532d; }
-    /* 특이사항 병합 행 — 위 상태 행과 한 묶음으로 보이도록 위쪽 테두리를 없애고
-       살짝 다른 배경으로 구분한다. */
-    .rpt-table.small tr.rpt-note-row td { border-top: none; background: #fafafa; }
+    /* 특이사항 병합 행 — 위 상태 행과 한 묶음으로 보이도록 위쪽 테두리를 없앤다.
+       배경은 지사 묶음 단위 줄무늬(grp-odd/even)를 그대로 물려받게 여기선 따로
+       칠하지 않는다 — td에 직접 배경을 주면 아래 줄무늬 규칙보다 우선해버려서
+       특이사항 행만 항상 같은 색이 되어(어느 지사든 구분이 안 됨) 묶음 구분 효과가
+       사라진다. */
+    .rpt-table.small tr.rpt-note-row td { border-top: none; }
     .rpt-table.small td.rpt-note-label { font-weight: 700; color: #555; white-space: nowrap; }
+    /* 지사 한 묶음(상태행 + 있으면 특이사항행)마다 배경을 교대로 옅게 칠해 어디부터
+       어디까지가 한 지사인지 한눈에 보이게 한다. td에 직접 배경(.ok/.issue)이 있는
+       칸은 그 색이 그대로 우선되고, 나머지 칸만 이 줄무늬가 비쳐 보인다. */
+    .rpt-table.small tr.grp-odd { background: #f2f2f2; }
     .rpt-empty { color: #888; font-size: 12px; }
     .rpt-note { color: #900; font-size: 11px; margin: 4px 0 0; }
     .rpt-page { page-break-after: always; }

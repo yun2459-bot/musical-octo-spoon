@@ -64,9 +64,11 @@ def _print_report_html() -> str:
 
     stoppages = HW.weekly_stoppage_reports()
     checklist = HW.weekly_checklist()
-    # 보고서에 넣을 사진은 기본적으로 지사별 최신 1장이지만, 화면에서 직접 고른 사진이
-    # 있으면 그것을 우선한다(st.session_state["_report_photo_pick"]: {지사: photo_url}).
-    photos = HW.load_photo_reports()
+    # 보고서에 넣을 사진은 기본적으로 지사별 이번주 최신 1장이지만, 화면에서 직접 고른
+    # 사진이 있으면 그것을 우선한다(st.session_state["_report_photo_pick"]: {지사: photo_url}).
+    # 지난주 이전 사진은 weekly_photo_reports()가 걸러내므로 "이번주 활동사진"에
+    # 섞여 들어가지 않는다.
+    photos = HW.weekly_photo_reports()
     picks = st.session_state.get("_report_photo_pick", {})
     if photos.empty:
         photo_by_branch = photos
@@ -148,14 +150,21 @@ def _print_report_html() -> str:
                 f'{html.escape(str(getattr(r, f)) or "-")}</td>'
                 for f in HW.CHECKLIST_FIELDS
             )
-            note = html.escape(str(r.점검특이사항) or "")
+            # 구글폼 자유서술 특이사항은 줄바꿈으로 구조화해 적는 경우가 많다(접수일자/
+            # 신고내용/조치결과 등 항목별 줄). html.escape는 줄바꿈을 안 지워주지만
+            # 브라우저는 기본적으로 \n을 공백으로 뭉개버리므로, <br>로 바꿔 원래
+            # 줄바꿈 구조를 인쇄물에도 그대로 살린다.
+            note = html.escape(str(r.점검특이사항) or "").replace("\n", "<br>")
             rows3.append(f"<tr><td>{html.escape(str(r.branch))}</td>{cells}<td>{note}</td></tr>")
         n_status = len(HW.CHECKLIST_FIELDS)
-        status_w = 76 / n_status  # 지사 8% + 특이사항 16% 나머지를 상태 칸 5개가 균등 분배
+        # 특이사항(자유서술, 내용이 김)이 예전엔 상태 칸 하나보다도 좁았던 걸(16% <
+        # 15.2%씩 5칸) 바로잡아, 지사·상태 칸은 짧은 라벨만 담으니 좁게 두고
+        # 특이사항에 폭 대부분을 몰아준다.
+        status_w = 35 / n_status
         colgroup = (
-            '<colgroup><col style="width:8%">'
+            '<colgroup><col style="width:7%">'
             + f'<col style="width:{status_w:.1f}%">' * n_status
-            + '<col style="width:16%"></colgroup>'
+            + '<col style="width:58%"></colgroup>'
         )
         section3 = (f'<table class="rpt-table small">{colgroup}'
                     f'<tr><th>지사</th>{head_cols}<th>특이사항</th></tr>{"".join(rows3)}</table>')
@@ -174,17 +183,15 @@ def _print_report_html() -> str:
                 f'<div class="rpt-photo-placeholder">사진 없음</div>'
                 f'<div class="cap">{html.escape(b)}</div></div>')
 
-    # 한 장을 최대한 크게 뽑기 위해 A4 한 면에 2열 x 3행(6장)씩 나눠 담는다 —
-    # 지사 12곳이면 사진 페이지가 2장이 된다.
+    # 지사가 정확히 12곳이라 4열 x 3행 그리드 한 장(가로 방향)에 전부 들어간다.
+    # 세로(portrait)인 1~4번 절과 달리 이 페이지만 가로(landscape)로 인쇄해
+    # 칸 하나하나를 더 넓게 쓴다.
     _all = HW.branch_order()
-    _chunks = [_all[i:i + 6] for i in range(0, len(_all), 6)] or [[]]
-    photo_pages = "".join(
-        f'<div class="rpt-page">'
-        f'<h2>5. 활동 사진 (지사별 1장)'
-        f'{f" — {i}/{len(_chunks)}" if len(_chunks) > 1 else ""}</h2>'
-        f'<div class="rpt-photo-grid">{"".join(_photo_card(b) for b in chunk)}</div>'
+    photo_pages = (
+        f'<div class="rpt-page rpt-photo-page">'
+        f'<h2>5. 온열질환 예방 활동사진</h2>'
+        f'<div class="rpt-photo-grid">{"".join(_photo_card(b) for b in _all)}</div>'
         f'</div>'
-        for i, chunk in enumerate(_chunks, start=1)
     )
 
     return f"""
@@ -221,18 +228,23 @@ def _render_print_report_button() -> None:
     .rpt-table th { background: #eee; }
     .rpt-table.small { table-layout: fixed; }
     .rpt-table.small th, .rpt-table.small td { font-size: 10.5px; padding: 3px 5px;
-        word-break: keep-all; overflow-wrap: break-word; }
+        word-break: keep-all; overflow-wrap: break-word; vertical-align: top; line-height: 1.5; }
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
     .rpt-table td.ok { background: #d9f2e3; color: #14532d; }
     .rpt-empty { color: #888; font-size: 12px; }
     .rpt-note { color: #900; font-size: 11px; margin: 4px 0 0; }
     .rpt-page { page-break-after: always; }
     .rpt-page:last-child { page-break-after: auto; }
-    /* 한 면(A4, 여백 14mm)에 2열x3행 = 6칸을 꽉 채워 사진을 최대한 크게 뽑는다. */
-    .rpt-photo-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: repeat(3, 1fr);
-        gap: 8mm; height: 235mm; }
-    .rpt-photo { display: flex; flex-direction: column; min-height: 0; }
-    .rpt-photo img { width: 100%; flex: 1 1 auto; min-height: 0; object-fit: cover; border-radius: 6px; }
+    /* 지사가 정확히 12곳이라 4열x3행 그리드로 한 면에 전부 들어간다. 이 페이지만
+       가로(landscape)로 인쇄해 세로 페이지(1~4번 절)보다 칸을 더 넓게 쓴다. */
+    @page landscape { size: A4 landscape; margin: 10mm; }
+    .rpt-photo-page { page: landscape; }
+    .rpt-photo-page h2 { margin-top: 0; }
+    .rpt-photo-grid { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr);
+        gap: 5mm; height: 168mm; }
+    .rpt-photo { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .rpt-photo img { width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; object-fit: cover;
+        border-radius: 6px; }
     .rpt-photo .cap { font-size: 11px; color: #333; margin-top: 4px; flex: 0 0 auto; }
     .rpt-photo-placeholder { width: 100%; flex: 1 1 auto; min-height: 0; border-radius: 6px;
         background: #f2f2f2; border: 1px dashed #bbb; display: flex; align-items: center;
@@ -460,7 +472,7 @@ st.title("현장 안전 통합 상황판")
 _mode = "🧪 LLM 하이브리드(파일럿)" if SEV_COL == "LLM심각도" else "📐 규칙기반(라벨)"
 st.caption(f"심각도 기준: **{_mode}** · 분석기간: {period_opt}")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석", "🌡️ 폭염 대응"])
+tab4, tab1, tab2, tab3 = st.tabs(["🌡️ 폭염 대응", "📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석"])
 
 # ================================================================== TAB4 폭염 대응
 with tab4:
@@ -637,9 +649,20 @@ with tab4:
                         }});
                         // 마커 bounds에 딱 맞추면 국토가 세로로 긴 형태라(경도 폭 < 위도 폭)
                         // 가로로 넓은 컨테이너에서는 좌우로 바다만 넓게 남는다. 지도 높이를
-                        // 늘려(kakaoMap div height=900px) 세로 비율을 국토 형태에 가깝게
+                        // 늘려(kakaoMap div height=1050px) 세로 비율을 국토 형태에 가깝게
                         // 맞춰 여백 없이 국토 위주로 채운다.
-                        map.setBounds(bounds);
+                        function fitMap() {{
+                            map.relayout();
+                            map.setBounds(bounds);
+                        }}
+                        fitMap();
+                        // Streamlit의 components.html iframe은 로드 직후엔 부모가 아직
+                        // 최종 크기로 자리잡기 전이라, 카카오맵이 그 순간의 좁은 크기로
+                        // 초기화된 채 멈춰(실제 칸은 넓어졌는데 지도만 왼쪽 위 구석에 작게
+                        // 그려지고 나머지는 빈 공간으로 남는 증상) 버리는 경우가 있다.
+                        // 컨테이너 크기가 바뀔 때마다 relayout+bounds를 다시 계산해 항상
+                        // 실제 렌더링 크기에 맞춘다.
+                        new ResizeObserver(fitMap).observe(container);
                     }});
                     </script>
                     """
@@ -777,14 +800,32 @@ with tab4:
                     lambda t: t.strftime("%m-%d %H:%M") if pd.notna(t) else "이번주 제출 없음")
                 display_df["보고"] = display_df["지사"].map(_branch_form_url)
 
+                # 예전엔 이슈(환자/조정/중지 발생)가 있으면 행 전체를 진한 빨강으로
+                # 칠했는데, 글자가 안 보일 정도로 가독성이 나빠 셀 단위로 옅게 바꿨다
+                # — 이슈가 있는 칸만 옅은 빨강으로 표시한다.
+                _today_wd = HW.now_kst().weekday()  # 0=월 ... 3=목, 4=금
+                _INCIDENT_CELL_STYLE = "background-color:#fdd7d7; color:#900; font-weight:700"
+
                 def _highlight_issue(row):
-                    if row["환자수"] != "0명" or row["작업조정"] != "0건" or row["작업중지"] != "0건":
-                        return ["background-color:#c81d25; color:white"] * len(row)
-                    # 전부 0이어도 이번주 제출이 없으면 "확인된 양호"가 아니라 "미확인"이므로
-                    # 초록을 칠하지 않는다 — 미제출 지사가 양호로 보이면 오히려 위험하다.
-                    if row["최근제출"] != "이번주 제출 없음":
-                        return [_OK_CELL_STYLE] * len(row)
-                    return [""] * len(row)
+                    cols = list(row.index)
+                    styles = [""] * len(row)
+                    not_submitted = row["최근제출"] == "이번주 제출 없음"
+                    for field in ("환자수", "작업조정", "작업중지"):
+                        zero_label = "0명" if field == "환자수" else "0건"
+                        if row[field] != zero_label:
+                            styles[cols.index(field)] = _INCIDENT_CELL_STYLE
+                    # 이번주 아직 제출이 없으면 요일이 늦어질수록(목요일 주황 → 금요일
+                    # 빨강) "최근 제출" 칸만 경고색으로 강조해 미제출 독촉이 눈에 띄게 한다.
+                    if not_submitted:
+                        if _today_wd == 4:
+                            styles[cols.index("최근제출")] = "background-color:#c81d25; color:white; font-weight:700"
+                        elif _today_wd == 3:
+                            styles[cols.index("최근제출")] = "background-color:#f2a154; color:white; font-weight:700"
+                    else:
+                        # 전부 0이고 이번주 제출도 있으면 "확인된 양호" — 행 전체를 초록으로.
+                        if row["환자수"] == "0명" and row["작업조정"] == "0건" and row["작업중지"] == "0건":
+                            styles = [_OK_CELL_STYLE] * len(row)
+                    return styles
 
                 st.dataframe(
                     display_df.style.apply(_highlight_issue, axis=1),
@@ -797,10 +838,11 @@ with tab4:
                 st.caption("환자수/작업조정 = 매일 신규 건수 문항을 **이번주 날짜별로 합산**(같은 날 "
                            "여러 번 제출해도 그날 마지막 값만 대표값으로 써서 중복 합산 방지) — 누적 "
                            "계산은 응답자가 아니라 대시보드가 담당합니다. 작업중지 = 이번주 \"작업중지 "
-                           "즉시 보고\" 제출 건수(사건 1건당 1건). 빨간 행 = 이번주 수치가 0보다 큰 지사"
+                           "즉시 보고\" 제출 건수(사건 1건당 1건). 옅은 빨강 칸 = 그 항목이 0보다 큼"
                            "(맨 위로 정렬). 초록 행 = 이번주 제출이 있고 전부 0인 지사(양호) — 아직 "
                            "제출하지 않은 지사는 0이어도 \"확인된 양호\"가 아니라 색을 칠하지 않습니다. "
-                           "\"최근 제출\" = 두 폼 중 이번주 그 지사의 마지막 제출 시각. "
+                           "\"최근 제출\" 칸은 이번주 미제출 지사에 한해 목요일부터 주황, 금요일부터 빨강으로 "
+                           "독촉 표시됩니다. \"최근 제출\" = 두 폼 중 이번주 그 지사의 마지막 제출 시각. "
                            "\"보고\" = 클릭하면 그 지사가 선택된 채로 온열질환·예방점검 구글폼이 새 탭에서 "
                            "열립니다. 작업중지 상세 내용은 위 \"🚨 작업조정·중지 보고\" 카드나 인쇄 보고서를 "
                            "확인하세요.")
@@ -848,11 +890,12 @@ with tab4:
                            "폼에 응답자 구분 문항이 없어 표에는 가장 최근 제출값만 반영되니, 여러 명이 "
                            "제출했다면 서로 다른 값을 냈는지 지사 내에서 확인이 필요합니다.")
 
-            photos = HW.load_photo_reports()
+            photos = HW.weekly_photo_reports()
             st.markdown("---")
-            st.subheader("📸 현장 활동 사진")
+            st.subheader("📸 이번주 현장 활동 사진")
             st.link_button("📸 현장 사진 보고하기", _PHOTO_FORM_URL, width="stretch")
-            st.caption("사진 업로드 문항이 있어 제출 시 구글 계정 로그인이 필요합니다.")
+            st.caption("사진 업로드 문항이 있어 제출 시 구글 계정 로그인이 필요합니다. "
+                       "지난주 이전에 올린 사진은 여기 목록과 인쇄 보고서에 나오지 않습니다(이번주 것만 반영).")
             if not photos.empty:
                 # 한 지사가 사진 여러 장을 한꺼번에 올리면 제출시각이 모두 같아 목록에서
                 # 서로 구분되지 않는다 — 지사별로 번호를 매겨 캐러셀 캡션과 선택 목록에
@@ -909,8 +952,15 @@ with tab4:
                                   expanded=bool(st.session_state.get("_photo_pick_confirmed"))):
                     picks = dict(st.session_state.get("_report_photo_pick", {}))
                     changed = False
-                    for _b in [b for b in HW.branch_order() if b in set(photos["branch"])]:
+                    # 사진이 있는 지사만 드롭다운에 나오면 "빠진 지사"가 안 보여
+                    # 헷갈리므로, 12개 지사를 전부 늘어놓고 없는 지사는 선택 불가한
+                    # "금주 활동 사진 없음" 한 줄로 표시한다.
+                    for _b in HW.branch_order():
                         _bp = photos[photos["branch"] == _b].sort_values("timestamp", ascending=False)
+                        if _bp.empty:
+                            st.selectbox(_b, ["금주 활동 사진 없음"], index=0, disabled=True,
+                                         key=f"_photopick_{_b}")
+                            continue
                         _labels = ["최신 사진 (기본)"] + [
                             f'#{_photo_no.get((_b, r.photo_url), 0)} · {r.timestamp.strftime("%m-%d %H:%M")}'
                             for r in _bp.itertuples()]
@@ -935,17 +985,23 @@ with tab4:
                         st.session_state["_photo_pick_confirmed"] = True
                     if st.session_state.get("_photo_pick_confirmed"):
                         _picked = st.session_state.get("_report_photo_pick", {})
-                        _branches = [b for b in HW.branch_order() if b in set(photos["branch"])]
-                        st.success(f"보고서에 들어갈 사진 {len(_branches)}개 지사 — "
-                                   f"직접 고른 지사 {len(_picked)}곳, 나머지는 최신 사진입니다.")
+                        _branches = HW.branch_order()
+                        _with_photo = [b for b in _branches if b in set(photos["branch"])]
+                        st.success(f"보고서에 들어갈 사진 — 전체 {len(_branches)}개 지사 중 "
+                                   f"{len(_with_photo)}곳 사진 있음(직접 고른 지사 {len(_picked)}곳, "
+                                   f"나머지는 최신 사진), {len(_branches) - len(_with_photo)}곳은 "
+                                   "사진 없음으로 인쇄됩니다.")
                         for _row in [_branches[i:i + 4] for i in range(0, len(_branches), 4)]:
                             for _col, _b in zip(st.columns(4), _row):
                                 _bp = photos[photos["branch"] == _b].sort_values(
                                     "timestamp", ascending=False)
-                                _u = _picked.get(_b) or _bp.iloc[0]["photo_url"]
-                                _n = _photo_no.get((_b, _u), 0)
-                                _manual = _b in _picked
                                 with _col:
+                                    if _bp.empty:
+                                        st.info(f"{_b} · 금주 활동 사진 없음")
+                                        continue
+                                    _u = _picked.get(_b) or _bp.iloc[0]["photo_url"]
+                                    _n = _photo_no.get((_b, _u), 0)
+                                    _manual = _b in _picked
                                     st.image(_u, width="stretch")
                                     st.caption(f'{_b} #{_n} · {"직접 선택" if _manual else "최신(기본)"}')
                     st.caption("목록의 번호(#1, #2…)는 위 사진 왼쪽 위에 붙은 번호와 같습니다 — 같은 시각에 "

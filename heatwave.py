@@ -964,15 +964,19 @@ def _drive_thumbnail_url(link: str, size: int = 500) -> str | None:
     return f"https://drive.google.com/thumbnail?id={m.group(1)}&sz=w{size}"
 
 
-# 캐러셀에 실제로 그리는 사진 수 상한 — 시즌 내내 제한 없이 쌓이면 <img> 태그가
-# 계속 늘어나(각각 구글 드라이브로 네트워크 요청) 페이지가 점점 무거워진다.
-MAX_CAROUSEL_PHOTOS = 24
+# 캐러셀·인쇄 보고서 사진 고르기에 실제로 그리는 지사별 사진 수 상한 — 시즌 내내
+# 제한 없이 쌓이면 <img> 태그가 계속 늘어나(각각 구글 드라이브로 네트워크 요청)
+# 페이지가 점점 무거워진다. 예전엔 전체 합산 24장으로 한 번에 잘랐는데, 그러면
+# 사진을 많이 올린 지사가 상한을 다 채워버려서 다른 지사(특히 오래전에 1장만
+# 올린 지사)가 통째로 사라지는 사고가 있었다(2026-08-04, 경남 지사 사진 누락
+# 확인) — 지사별로 상한을 두어 어떤 지사든 최소 최근 사진은 항상 보이게 한다.
+MAX_PHOTOS_PER_BRANCH = 12
 
 
 @st.cache_data(ttl=300)
 def load_photo_reports() -> pd.DataFrame:
-    """현장 사진 전용 구글폼(별도 폼) 응답 -> (branch, photo_url, timestamp) 최신순 상위
-    MAX_CAROUSEL_PHOTOS건.
+    """현장 사진 전용 구글폼(별도 폼) 응답 -> (branch, photo_url, timestamp) 최신순,
+    지사별 최대 MAX_PHOTOS_PER_BRANCH건.
 
     PHOTO_SHEET_CSV_URL이 비어있거나 제출이 없으면 빈 DataFrame을 반환한다
     (호출부는 이 경우 캐러셀을 안전하게 숨긴다). 5분 캐시로 화면 조작마다
@@ -1014,8 +1018,25 @@ def load_photo_reports() -> pd.DataFrame:
 
     if not rows:
         return pd.DataFrame(columns=cols)
-    return (pd.DataFrame(rows).sort_values("timestamp", ascending=False)
-            .head(MAX_CAROUSEL_PHOTOS).reset_index(drop=True))
+    sorted_rows = pd.DataFrame(rows).sort_values("timestamp", ascending=False)
+    return (sorted_rows.groupby("branch", group_keys=False)
+            .head(MAX_PHOTOS_PER_BRANCH)
+            .sort_values("timestamp", ascending=False)
+            .reset_index(drop=True))
+
+
+def weekly_photo_reports() -> pd.DataFrame:
+    """이번주(월요일~오늘) 제출된 현장 활동 사진만 — load_photo_reports()를 이번주로 거른다.
+
+    지난주 이전 사진이 "이번주 활동사진"에 섞여 들어가면 안 되므로(예: 지사가 이번주에
+    아직 사진을 안 올렸는데 지난주 사진이 최신값으로 잡혀 보고서에 실리는 사고),
+    캐러셀·인쇄 보고서 사진 고르기·인쇄 보고서 자체를 전부 이 함수로 통일한다.
+    """
+    photos = load_photo_reports()
+    if photos.empty:
+        return photos
+    _, this_week = this_and_last_week()
+    return photos[photos["timestamp"] >= this_week].reset_index(drop=True)
 
 
 def weekly_alert_counts_by_branch(notif: pd.DataFrame) -> pd.DataFrame:

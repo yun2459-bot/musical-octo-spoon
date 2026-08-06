@@ -1180,6 +1180,13 @@ def solapi_configured() -> bool:
         return False
 
 
+# secrets에 Solapi 자격증명이나 담당자 연락처가 아직 없어도(지사 도입 추진
+# 시연 단계에서는 대부분 이 상태다) 버튼 흐름 자체는 보여줄 수 있어야 한다는
+# 요청(2026-08-07)으로 도입한 시연용 가짜 수신자 — 실제 번호가 아니므로
+# 시연 모드에서 절대 실제 API를 호출하지 않는다(app.py가 데모/실발송을 분기).
+DEMO_RECIPIENT = {"name": "예시 담당자", "phone": "010-0000-0000"}
+
+
 def branches_with_recipients() -> list[str]:
     """secrets.toml의 [recipients] 테이블에 담당자가 1명 이상 등록된 지사 목록."""
     try:

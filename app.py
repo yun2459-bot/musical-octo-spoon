@@ -368,9 +368,11 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
             // → 재기 전에 page1의 폭을 실제 인쇄 폭으로 고정해 화면 배치를 인쇄
             //   배치와 일치시킨다.
             //
-            // 또 zoom으로 줄인 만큼 오른쪽 폭이 남으므로 폭을 1/배율로 넓혀 인쇄 폭을
-            // 꽉 채운다 — 폭이 넓어지면 줄바꿈이 줄어 필요한 축소량 자체가 작아진다.
-            // 폭과 배율이 서로 물려 한 번에 안 떨어지므로 몇 번 반복해 수렴시킨다.
+            // 폭은 인쇄 폭에 "고정"하고 균일 축소만 한다. 한때 축소한 만큼 폭을
+            // 1/배율로 넓혀 지면을 꽉 채우게 했는데, 그러면 요소 폭이 인쇄 폭보다
+            // 넓어져 인쇄 시 배치가 어긋났다(2026-08-07 사용자 확인) — 폭을 넘기지
+            // 않으면 최악의 경우에도 "덜 줄어들 뿐" 가로로 깨지지는 않는다.
+            // 폭이 고정이면 zoom은 순수 배율이라 한 번 계산으로 정확히 떨어진다.
             var doc = w.document;
             var page = doc.getElementById('page1');
             if (page) {{
@@ -383,15 +385,13 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
                 var pageW = box.width, pageH = box.height;
                 doc.body.removeChild(probe);
 
-                var scale = 1;
-                for (var i = 0; i < 8; i++) {{
-                    page.style.width = (pageW / scale) + 'px';
-                    page.style.zoom = scale;
-                    // getBoundingClientRect는 zoom이 반영된 "실제 그려지는" 높이라
-                    // scrollHeight(브라우저마다 zoom 반영 여부가 다름)보다 안전하다.
-                    var renderedH = page.getBoundingClientRect().height;
-                    if (!renderedH || renderedH <= pageH) break;
-                    scale = scale * (pageH / renderedH) * 0.99;  // 0.99: 반올림 여유
+                page.style.width = pageW + 'px';
+                page.style.zoom = 1;
+                // getBoundingClientRect는 zoom이 반영된 "실제 그려지는" 높이라
+                // scrollHeight(브라우저마다 zoom 반영 여부가 다름)보다 안전하다.
+                var naturalH = page.getBoundingClientRect().height;
+                if (naturalH > pageH) {{
+                    page.style.zoom = (pageH / naturalH) * 0.99;  // 0.99: 반올림 여유
                 }}
             }}
             w.focus();

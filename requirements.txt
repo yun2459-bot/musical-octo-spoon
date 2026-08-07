@@ -7,3 +7,6 @@ wordcloud==1.9.6
 PyYAML==6.0.3
 requests==2.32.5
 openpyxl==3.1.5
+# 사진을 data: URI로 심기 전에 줄이는 데 쓴다(heatwave.py의 _github_image_src).
+# matplotlib/streamlit이 어차피 끌고 오지만, 직접 쓰므로 명시해 둔다.
+Pillow==12.3.0

@@ -13,7 +13,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import io
 import math
+import mimetypes
 import re
 import sqlite3
 import time
@@ -1037,8 +1039,10 @@ def _drive_thumbnail_url(link: str, size: int = 500) -> str | None:
 # 번에 올려 등록하는 두 번째 경로. Google Sheets에 실제로 쓰려면 서비스 계정이
 # 필요한데 이 계정은 조직 정책(iam.disableServiceAccountKeyCreation)에 막혀 키를
 # 못 만들어서(2026-08-06 확인), 대신 GitHub Contents API로 이 저장소에 직접
-# 커밋하는 방식을 쓴다 — 저장소가 public이라 읽기는 인증 없이 raw URL로 바로
-# 되고, 쓰기(커밋)만 개인 액세스 토큰(PAT, Contents: Read and write 권한)이 필요하다.
+# 커밋하는 방식을 쓴다 — 읽기·쓰기 모두 개인 액세스 토큰(PAT, Contents: Read and
+# write 권한)을 쓴다. 예전엔 저장소가 public이라 읽기만은 인증 없이 raw URL로 했는데,
+# 비공개 전환 시 raw URL이 전부 404가 되어버리므로 읽기도 API 경유로 통일했다
+# (토큰이 없는 환경에서는 raw URL로 자동 폴백 — _github_read_bytes 참고).
 GITHUB_REPO = "yun2459-bot/musical-octo-spoon"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}/contents"
 GITHUB_RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
@@ -1082,29 +1086,87 @@ def _github_put_file(path: str, content: bytes, message: str, sha: str | None = 
     r.raise_for_status()
 
 
+def _github_read_bytes(path: str) -> bytes | None:
+    """저장소 파일을 bytes로 읽는다 — 토큰이 있으면 Contents API(비공개 저장소에서도
+    동작), 없으면 raw URL(공개 저장소 전제)로 떨어진다.
+
+    저장소를 private으로 전환하면 raw.githubusercontent.com은 인증이 없어 전부
+    404가 된다 — 사진과 목록 CSV가 통째로 안 보이게 되므로, 이미 쓰고 있던
+    GITHUB_TOKEN으로 API를 통해 읽도록 바꿨다(2026-08-07).
+    """
+    token = _github_token()
+    if token:
+        # raw 미디어타입으로 받아야 한다 — 기본(JSON+base64) 응답은 1MB를 넘는 파일에
+        # encoding:"none", content:"" 를 돌려줘 내용이 통째로 비어버린다(실제로 2.8MB
+        # 짜리 현장 사진이 여기 걸렸다, 2026-08-07). raw는 100MB까지 그대로 준다.
+        try:
+            r = requests.get(
+                f"{GITHUB_API_BASE}/{path}",
+                headers={"Authorization": f"Bearer {token}",
+                          "Accept": "application/vnd.github.raw"},
+                timeout=20)
+        except Exception:
+            return None
+        return r.content if r.status_code == 200 else None
+    try:
+        r = requests.get(f"{GITHUB_RAW_BASE}/{path}", timeout=10)
+    except Exception:
+        return None
+    return r.content if r.status_code == 200 else None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _github_image_src(path: str) -> str:
+    """저장소의 사진 한 장을 <img src>에 바로 넣을 수 있는 값으로 바꾼다.
+
+    <img>는 Authorization 헤더를 붙일 수 없어, 비공개 저장소에서는 URL로는 절대
+    못 불러온다 — 파일을 직접 받아 data: URI로 심는다. 같은 경로의 사진은 잘 안
+    바뀌므로 1시간 캐시로 매번 내려받지 않게 한다.
+    """
+    content = _github_read_bytes(path)
+    if not content:
+        return ""
+    # 원본은 휴대폰으로 찍은 2~3MB급이라 그대로 심으면 base64로 4MB 가까이 부풀고,
+    # 12개 지사를 한 화면(캐러셀·인쇄 보고서)에 늘어놓으면 수십MB가 되어 페이지가
+    # 못 쓰게 느려진다 — 화면에 보이는 크기는 어차피 작으니 긴 변 1200px로 줄인다.
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(content))
+        img.thumbnail((1200, 1200))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=82, optimize=True)
+        return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+    except Exception:
+        # 이미지로 못 읽는 파일이면 원본을 그대로 넘긴다(적어도 보이기는 하게).
+        mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+        return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+
+
 @st.cache_data(ttl=60)
 def load_bulk_photo_reports() -> pd.DataFrame:
     """엑셀 일괄 등록으로 GitHub에 커밋된 사진 목록 — (branch, photo_url, timestamp,
-    description). 로컬 스냅샷이 아니라 raw.githubusercontent.com에서 매번 최신
-    커밋을 직접 읽는다(로컬 heatwave_data/는 git pull 전까지 안 바뀌므로, 업로드
-    직후에도 바로 반영되려면 여기서 최신을 봐야 한다). 파일이 없으면(아직 한 번도
-    등록된 적 없음) 빈 DataFrame.
+    description). 로컬 스냅샷이 아니라 저장소에서 매번 최신 커밋을 직접 읽는다
+    (로컬 heatwave_data/는 git pull 전까지 안 바뀌므로, 업로드 직후에도 바로
+    반영되려면 여기서 최신을 봐야 한다). 파일이 없으면(아직 한 번도 등록된 적
+    없음) 빈 DataFrame.
     """
     cols = ["branch", "photo_url", "timestamp", "description"]
-    try:
-        r = requests.get(f"{GITHUB_RAW_BASE}/{BULK_PHOTOS_CSV}", timeout=10)
-    except Exception:
-        return pd.DataFrame(columns=cols)
-    if r.status_code != 200:
+    content = _github_read_bytes(BULK_PHOTOS_CSV)
+    if not content:
         return pd.DataFrame(columns=cols)
     try:
-        df = pd.read_csv(pd.io.common.StringIO(r.text))
+        df = pd.read_csv(io.BytesIO(content))
     except Exception:
         return pd.DataFrame(columns=cols)
     if df.empty or not set(BULK_PHOTOS_COLS).issubset(df.columns):
         return pd.DataFrame(columns=cols)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["photo_url"] = df["image_path"].apply(lambda p: f"{GITHUB_RAW_BASE}/{p}")
+    df["photo_url"] = df["image_path"].apply(_github_image_src)
+    # 못 읽은 사진(경로 오타·삭제 등)은 빈 <img>로 깨져 보이므로 아예 제외한다.
+    df = df[df["photo_url"].astype(bool)]
     return df[["branch", "photo_url", "timestamp", "description"]]
 
 

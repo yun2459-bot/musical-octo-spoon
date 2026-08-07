@@ -201,6 +201,8 @@ def _print_report_html(week_start: pd.Timestamp | None = None) -> str:
         def _cell_class(field: str, value: str) -> str:
             if "특이사항 기재" in value:
                 return "issue"
+            if not value.strip():
+                return "no-submit"
             if value.strip() == HW.CHECKLIST_OK[field]:
                 return "ok"
             return ""
@@ -301,6 +303,9 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
         word-break: keep-all; overflow-wrap: break-word; vertical-align: top; line-height: 1.5; }
     .rpt-table td.issue { background: #fdd; color: #900; font-weight: 700; }
     .rpt-table td.ok { background: #d9f2e3; color: #14532d; }
+    /* 그 주에 아예 점검을 제출하지 않은 지사 — 특이사항(issue)과 구분해 따로 두되
+       똑같이 눈에 띄는 빨강으로 칠해 미제출도 확인이 필요한 상태임을 드러낸다. */
+    .rpt-table td.no-submit { background: #fdd; color: #900; }
     /* 특이사항 병합 행 — 위 상태 행과 한 묶음으로 보이도록 위쪽 테두리를 없앤다.
        배경은 지사 묶음 단위 줄무늬(grp-odd/even)를 그대로 물려받게 여기선 따로
        칠하지 않는다 — td에 직접 배경을 주면 아래 줄무늬 규칙보다 우선해버려서

@@ -293,10 +293,13 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
     css = """
     body { font-family: 'Malgun Gothic', 'SEBANG Gothic', sans-serif; color: #111; margin: 20px; }
     h1 { font-size: 20px; margin: 0 0 4px; }
-    .rpt-date { color: #666; font-size: 12px; margin-bottom: 14px; }
-    h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 2px solid #333; padding-bottom: 4px; }
-    .rpt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
-    .rpt-table th, .rpt-table td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; }
+    .rpt-date { color: #666; font-size: 12px; margin-bottom: 8px; }
+    h2 { font-size: 15px; margin: 10px 0 4px; border-bottom: 2px solid #333; padding-bottom: 3px; }
+    .rpt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 6px; }
+    /* 1~3번 절 표는 한 줄짜리 짧은 값만 담는데 줄 높이가 커서 세로 공간을 많이
+       먹었다 — 한 장 맞춤 축소량을 줄이려 여백을 최소로 좁힘(2026-08-07). */
+    .rpt-table th, .rpt-table td { border: 1px solid #ccc; padding: 2px 7px; text-align: left;
+        line-height: 1.35; }
     .rpt-table th { background: #eee; }
     .rpt-table.small { table-layout: fixed; }
     .rpt-table.small th, .rpt-table.small td { font-size: 10.5px; padding: 3px 5px;
@@ -336,6 +339,9 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
         background: #f2f2f2; border: 1px dashed #bbb; display: flex; align-items: center;
         justify-content: center; color: #999; font-size: 12px; }
     @page { size: A4; margin: 14mm; }
+    /* @page 여백에 더해 body 여백까지 들어가면 실제 인쇄 영역이 182x269mm보다 작아져
+       아래 JS의 "한 장 맞춤" 계산이 어긋난다 — 인쇄 때는 body 여백을 없앤다. */
+    @media print { body { margin: 0; } }
     """
     full_html = f"<html><head><meta charset='utf-8'><title>주간 온열질환 예방 대응 보고서</title>" \
                 f"<style>{css}</style></head><body>{_print_report_html(week_start)}</body></html>"
@@ -351,35 +357,52 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
         w.document.open();
         w.document.write({doc_js});
         w.document.close();
-        setTimeout(function () {{
-            // 1~4번 절(id="page1")은 특이사항이 많은 주에는 A4 한 장을 넘겨 2페이지로
-            // 넘어가버린다 — 항상 한 장에 담기도록, 실제 A4 인쇄 가능 높이(297mm -
-            // 위아래 여백 14mm*2)를 px로 정확히 잰 뒤, 넘치는 만큼 zoom으로 전체를
-            // 줄인다. mm->px 환산을 하드코딩하지 않고 화면 밖 프로브 엘리먼트로 직접
-            // 재서, 브라우저별 배율 차이에도 안전하게 맞춘다.
+        var fitAndPrint = function () {{
+            // 1~4번 절(id="page1")을 A4 한 장에 무조건 맞춘다.
+            //
+            // 예전엔 팝업 창(=임의의 화면 폭)에서 잰 높이로 축소 배율을 계산했는데,
+            // 정작 인쇄는 A4 인쇄 폭(182mm)으로 "다시 배치"된다 — 폭이 좁아지면 표
+            // 칸 안에서 줄바꿈이 훨씬 늘어나 실제 인쇄 높이가 화면 높이보다 크게
+            // 커진다. 그래서 계산된 축소량이 애초에 부족했고, 최저 한도(0.55)를
+            // 없애도 계속 2페이지로 넘어갔다(2026-08-07 원인 규명).
+            // → 재기 전에 page1의 폭을 실제 인쇄 폭으로 고정해 화면 배치를 인쇄
+            //   배치와 일치시킨다.
+            //
+            // 또 zoom으로 줄인 만큼 오른쪽 폭이 남으므로 폭을 1/배율로 넓혀 인쇄 폭을
+            // 꽉 채운다 — 폭이 넓어지면 줄바꿈이 줄어 필요한 축소량 자체가 작아진다.
+            // 폭과 배율이 서로 물려 한 번에 안 떨어지므로 몇 번 반복해 수렴시킨다.
             var doc = w.document;
             var page = doc.getElementById('page1');
             if (page) {{
+                // mm->px 환산은 브라우저·배율마다 달라 하드코딩하지 않고 직접 잰다.
+                // 182x269mm = A4(210x297)에서 @page 여백 14mm를 뺀 실제 인쇄 영역.
                 var probe = doc.createElement('div');
-                probe.style.height = '269mm';
-                probe.style.position = 'absolute';
-                probe.style.visibility = 'hidden';
+                probe.style.cssText = 'position:absolute;visibility:hidden;width:182mm;height:269mm;';
                 doc.body.appendChild(probe);
-                var targetPx = probe.getBoundingClientRect().height;
+                var box = probe.getBoundingClientRect();
+                var pageW = box.width, pageH = box.height;
                 doc.body.removeChild(probe);
-                page.style.zoom = 1;
-                var naturalPx = page.scrollHeight;
-                if (naturalPx > targetPx) {{
-                    // 0.55 최저 한도가 있으면 특이사항이 많은 주엔 그 이하로도
-                    // 못 줄여 2페이지로 넘어가는 경우가 있었다(2026-08-07) — 무조건
-                    // 한 장에 맞추라는 요청으로 최저 한도를 없앴다. 다만 zoom이 0에
-                    // 가까워지는 극단적 경우를 막기 위한 최소한의 바닥(0.1)만 남긴다.
-                    page.style.zoom = Math.max(0.1, targetPx / naturalPx);
+
+                var scale = 1;
+                for (var i = 0; i < 8; i++) {{
+                    page.style.width = (pageW / scale) + 'px';
+                    page.style.zoom = scale;
+                    // getBoundingClientRect는 zoom이 반영된 "실제 그려지는" 높이라
+                    // scrollHeight(브라우저마다 zoom 반영 여부가 다름)보다 안전하다.
+                    var renderedH = page.getBoundingClientRect().height;
+                    if (!renderedH || renderedH <= pageH) break;
+                    scale = scale * (pageH / renderedH) * 0.99;  // 0.99: 반올림 여유
                 }}
             }}
             w.focus();
             w.print();
-        }}, 350);
+        }};
+        // 폰트가 다 로드되기 전에 재면 글자 크기가 달라져 높이 계산이 통째로 틀어진다.
+        if (w.document.fonts && w.document.fonts.ready) {{
+            w.document.fonts.ready.then(function () {{ setTimeout(fitAndPrint, 60); }});
+        }} else {{
+            setTimeout(fitAndPrint, 350);
+        }}
     }};
     </script>
     """

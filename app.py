@@ -365,7 +365,11 @@ def _render_print_report_button(week_start: pd.Timestamp | None = None) -> None:
                 page.style.zoom = 1;
                 var naturalPx = page.scrollHeight;
                 if (naturalPx > targetPx) {{
-                    page.style.zoom = Math.max(0.55, targetPx / naturalPx);
+                    // 0.55 최저 한도가 있으면 특이사항이 많은 주엔 그 이하로도
+                    // 못 줄여 2페이지로 넘어가는 경우가 있었다(2026-08-07) — 무조건
+                    // 한 장에 맞추라는 요청으로 최저 한도를 없앴다. 다만 zoom이 0에
+                    // 가까워지는 극단적 경우를 막기 위한 최소한의 바닥(0.1)만 남긴다.
+                    page.style.zoom = Math.max(0.1, targetPx / naturalPx);
                 }}
             }}
             w.focus();

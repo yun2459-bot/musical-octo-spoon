@@ -1456,17 +1456,22 @@ with tab_disaster:
         _rank = {lvl: i for i, lvl in enumerate(HW.ADV_LEVEL_ORDER)}
 
         def _disaster_marker(color: str, badge: str, label: str, badge_count: int = 1,
-                              label_side: str = "bottom"):
+                              label_side: str = "bottom", anchor_dx: int = 0):
             """재해 지도 전용 마커 — 폭염 지도의 SVG 배지 기법을 그대로 쓰되, 추정치
             점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전.
 
             badge_count(동시 발효 재해 종류 수)가 늘어나면 이모지를 다 이어 붙인 배지가
             원보다 커지므로, 그만큼 글자 크기를 줄여 원 안에 최대한 담는다.
 
-            label_side="right"는 경북·울산·부산처럼 동해안을 따라 세로로 촘촘히 붙은
-            지사의 라벨이 서쪽(내륙, 경남 방향)으로 뻗어 나가 옆 지사 마커를 가리는
-            문제(2026-08-10 피드백)를 막으려고 추가 — 라벨을 원 아래가 아니라 오른쪽
-            (바다 쪽)에 붙인다. 원(=실제 좌표 앵커)의 위치·크기는 그대로다.
+            label_side: "bottom"(기본)/"top"/"right". 경북·울산·부산은 동해안을 따라
+            세로로 촘촘히 붙어 기본(아래) 라벨이 서쪽(경남 방향) 마커를 가려서
+            "right"(바다 쪽)로 뺐다. 광양·삼천포·경남은 남해안에서 세 지사가 몰려
+            아래쪽끼리 겹쳐서(2026-08-10 피드백) 가운데(삼천포)만 "top"으로 바꿔
+            위/아래로 교차시켰다.
+
+            anchor_dx: 실제 좌표는 그대로 두고 화면에 그려지는 위치만 오른쪽으로
+            미세 이동(앵커 x를 그만큼 줄이면 이미지가 오른쪽으로 밀려 보인다) —
+            부산/울산/경북 원이 카카오맵 자체 지명 글자와 겹쳐 보인다는 피드백 반영.
             """
             d = 34
             font_size = 13 if badge_count <= 1 else max(8, 13 - (badge_count - 1) * 3)
@@ -1480,6 +1485,10 @@ with tab_disaster:
                 w, h = d + gap + label_w, max(d, label_h)
                 cx, cy = d / 2, h / 2
                 label_x, label_y = d + gap, (h - label_h) / 2
+            elif label_side == "top":
+                w, h = max(d, label_w), d + gap + label_h
+                cx, cy = w / 2, label_h + gap + d / 2
+                label_x, label_y = cx - label_w / 2, 0
             else:
                 w, h = max(d, label_w), d + gap + label_h
                 cx, cy = w / 2, d / 2
@@ -1499,7 +1508,7 @@ with tab_disaster:
                 f'</svg>'
             )
             uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
-            return uri, round(w), round(h), round(cx), round(cy)
+            return uri, round(w), round(h), round(cx - anchor_dx), round(cy)
 
         # 배지에 숫자(동시 건수)만 있으면 무슨 재해인지 알려고 아래 표까지 내려가야
         # 했다("경인 6"이 뭔지 안 보임, 2026-08-07 피드백) — 이모지+라벨에 재해명을
@@ -1513,7 +1522,13 @@ with tab_disaster:
         # 동해안을 따라 경북(포항)·울산·부산이 위아래로 촘촘히 붙어 있어, 아래쪽으로
         # 뻗는 기본 라벨이 서쪽(경남 방향)을 가린다는 피드백(2026-08-10) — 이 세
         # 지사만 라벨을 오른쪽(바다 쪽)으로 돌린다.
-        _LABEL_RIGHT_BRANCHES = {"경북", "울산", "부산"}
+        # 남해안의 광양·삼천포·경남도 서로 몰려 있어 기본(아래) 라벨끼리 겹쳤다
+        # (2026-08-10 피드백) — 가운데인 삼천포만 위로 돌려 아래/위/아래로 교차시킨다.
+        _LABEL_SIDE_OVERRIDE = {"경북": "right", "울산": "right", "부산": "right", "삼천포": "top"}
+        # 부산/울산/경북 원이 카카오맵 자체 지명 글자와 겹쳐 보인다는 피드백 —
+        # 실제 좌표는 그대로 두고 화면 렌더링 위치만 오른쪽으로 살짝 밀어준다
+        # (96dpi 기준 3mm ≈ 11px).
+        _ANCHOR_DX_OVERRIDE = {"경북": 11, "울산": 11, "부산": 11}
 
         # 재해명만으론 "그래서 얼마나 심한지" 안 보인다는 피드백(2026-08-10) — 재해
         # 종류별로 뜻이 통하는 실측치를 붙인다. 값이 없으면(관측지점에 그 센서가
@@ -1558,7 +1573,8 @@ with tab_disaster:
                 title = f'{o.branch} · 발효 중인 특보 없음'
             img, w, h, ax, ay = _disaster_marker(
                 color, badge, label, badge_count=max(1, len(distinct_names)),
-                label_side="right" if o.branch in _LABEL_RIGHT_BRANCHES else "bottom")
+                label_side=_LABEL_SIDE_OVERRIDE.get(o.branch, "bottom"),
+                anchor_dx=_ANCHOR_DX_OVERRIDE.get(o.branch, 0))
             _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
                               "ax": ax, "ay": ay, "title": title})
 

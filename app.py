@@ -609,7 +609,8 @@ st.title("현장 안전 통합 상황판")
 _mode = "🧪 LLM 하이브리드(파일럿)" if SEV_COL == "LLM심각도" else "📐 규칙기반(라벨)"
 st.caption(f"심각도 기준: **{_mode}** · 분석기간: {period_opt}")
 
-tab4, tab1, tab2, tab3 = st.tabs(["🌡️ 폭염 대응", "📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석"])
+tab4, tab_disaster, tab1, tab2, tab3 = st.tabs(
+    ["🌡️ 폭염 대응", "🌪️ 자연재해 통합경보", "📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석"])
 
 # ================================================================== TAB4 폭염 대응
 with tab4:
@@ -1428,6 +1429,44 @@ with tab4:
                             if _send_result["failed"]:
                                 st.error("❌ 발송 실패: " + " / ".join(
                                     f"{f['name']}: {f['reason']}" for f in _send_result["failed"]))
+
+# ============================================================ TAB 자연재해 통합경보
+# 1단계(2026-08-07): 폭염 외 11종 기상특보(태풍/호우/한파 등)를 지도 대신 우선
+# 표 형태로 보여준다 — 지사×재해유형×등급 매칭이 실데이터로 맞는지 먼저 확인하고,
+# 검증되면 지도 배지로 옮기는 순서로 "천천히" 진행하기로 함(사용자 요청).
+# 폭염 대응(tab4)과 별개 탭으로 분리 — 기존 폭염 파이프라인/화면은 건드리지 않는다.
+with tab_disaster:
+    st.subheader("🌪️ 자연재해 통합경보 (1단계 — 발효 현황)")
+    st.caption("기상청이 지금 발효 중인 특보(폭염 포함 12종)를 지사별로 모았습니다. "
+               "폭염 대응 탭과는 별개로, 태풍·호우·한파 등 다른 재해까지 확장한 화면입니다.")
+
+    _adv = HW.active_advisories_by_branch()
+    if _adv.empty:
+        st.success("✅ 현재 발효 중인 특보가 없습니다.")
+    else:
+        _ADV_LEVEL_COLOR = {"주의보": "#f4d35e", "경보": "#f2a154", "중대경보": "#c81d25"}
+        _adv_display = _adv.copy()
+        _adv_display["재해"] = _adv_display["wrn_label"]
+        _adv_display["지사"] = _adv_display["branch"]
+        _adv_display["사업장"] = _adv_display["city"]
+        _adv_display["등급"] = _adv_display["level"]
+
+        def _level_style(row: pd.Series) -> list[str]:
+            color = _ADV_LEVEL_COLOR.get(row["등급"], "#888")
+            return [f"background-color:{color}22" for _ in row]
+
+        st.dataframe(
+            _adv_display[["지사", "사업장", "재해", "등급"]].style.apply(_level_style, axis=1),
+            width="stretch", hide_index=True)
+
+        _summary = (_adv_display.groupby(["재해", "등급"]).size()
+                    .reset_index(name="건수").sort_values(["재해", "등급"]))
+        st.caption("종류별 발효 건수: " + ", ".join(
+            f"{r.재해} {r.등급} {r.건수}건" for r in _summary.itertuples()))
+
+    st.markdown("---")
+    st.caption("다음 단계: 이 데이터가 실데이터와 맞는지 확인되면 지도 위 배지 표시로 옮길 예정입니다.")
+
 
 # ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트
 # 폭염 대응(tab4) 블록을 분석 탭보다 먼저 그린다 — 잠겨 있을 때 st.stop()으로 이후

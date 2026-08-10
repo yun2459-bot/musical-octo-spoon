@@ -106,8 +106,8 @@ def load_notifications() -> pd.DataFrame:
 
 
 def load_branch_cities() -> pd.DataFrame:
-    """sites.yaml -> (branch, city, lat, lon, stn, office, site_count, satellite) 평탄화."""
-    cols = ["branch", "city", "lat", "lon", "stn", "office", "site_count", "satellite"]
+    """sites.yaml -> (branch, city, lat, lon, stn, region_id, office, site_count, satellite) 평탄화."""
+    cols = ["branch", "city", "lat", "lon", "stn", "region_id", "office", "site_count", "satellite"]
     if not SITES_YAML_PATH.exists():
         return pd.DataFrame(columns=cols)
     raw = yaml.safe_load(SITES_YAML_PATH.read_text(encoding="utf-8"))
@@ -117,6 +117,7 @@ def load_branch_cities() -> pd.DataFrame:
             rows.append({
                 "branch": b["name"], "city": c["name"],
                 "lat": c.get("lat"), "lon": c.get("lon"), "stn": c.get("stn"),
+                "region_id": c.get("region_id"),
                 "office": bool(c.get("office", False)), "site_count": c.get("site_count", 1),
                 "satellite": bool(c.get("satellite", False)),
             })
@@ -129,6 +130,42 @@ def branch_order() -> list[str]:
     if cities.empty:
         return []
     return cities["branch"].drop_duplicates().tolist()
+
+
+# 폭염(H) 외 11종 재해의 코드->한글명. 온도를 조져보자/src/weather.py의 WRN_LABELS와
+# 동일한 값을 유지할 것 — 2026-08-07에 기상청 API를 직접 조회해 실제 발효 코드(H/R/V/W)로
+# 검증했다. "K" 코드는 여러 소스를 대조해도 정체를 못 찾아 라벨 없이 원본 코드 그대로
+# 보여준다(틀린 이름을 붙이느니 코드 그대로 노출하는 편이 안전하다).
+WRN_LABELS = {
+    "W": "강풍", "V": "풍랑", "R": "호우", "O": "대설", "D": "건조",
+    "P": "폭풍해일", "Y": "지진해일", "C": "한파", "T": "태풍", "N": "황사",
+    "H": "폭염", "F": "안개",
+}
+
+
+def active_advisories_by_branch() -> pd.DataFrame:
+    """지금 발효 중인 특보(폭염 포함 12종 전체)를 지사·도시 단위로 매칭해 반환.
+
+    advisories 테이블은 "온도를 조져보자/main.py"가 매 주기 통째로 교체하는
+    스냅샷이라(replace_advisories 참고) 여기 있는 행 = 지금 발효 중인 것 그대로다.
+    한 지역에 특보가 여럿 뜰 수 있어 (branch, city) 기준으로 여러 행이 나올 수 있다.
+    """
+    cols = ["branch", "city", "wrn", "wrn_label", "level", "effective_at"]
+    cities = load_branch_cities()
+    if cities.empty or "region_id" not in cities.columns:
+        return pd.DataFrame(columns=cols)
+    try:
+        with _connect() as conn:
+            adv = pd.read_sql("SELECT * FROM advisories", conn)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if adv.empty:
+        return pd.DataFrame(columns=cols)
+    merged = cities.dropna(subset=["region_id"])[["branch", "city", "region_id"]].merge(
+        adv, on="region_id", how="inner")
+    if merged.empty:
+        return pd.DataFrame(columns=cols)
+    return merged[cols].sort_values(["branch", "city"]).reset_index(drop=True)
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

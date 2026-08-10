@@ -1455,12 +1455,18 @@ with tab_disaster:
                       for b, g in _adv.groupby("branch")} if not _adv.empty else {}
         _rank = {lvl: i for i, lvl in enumerate(HW.ADV_LEVEL_ORDER)}
 
-        def _disaster_marker(color: str, badge: str, label: str, badge_count: int = 1):
+        def _disaster_marker(color: str, badge: str, label: str, badge_count: int = 1,
+                              label_side: str = "bottom"):
             """재해 지도 전용 마커 — 폭염 지도의 SVG 배지 기법을 그대로 쓰되, 추정치
             점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전.
 
             badge_count(동시 발효 재해 종류 수)가 늘어나면 이모지를 다 이어 붙인 배지가
             원보다 커지므로, 그만큼 글자 크기를 줄여 원 안에 최대한 담는다.
+
+            label_side="right"는 경북·울산·부산처럼 동해안을 따라 세로로 촘촘히 붙은
+            지사의 라벨이 서쪽(내륙, 경남 방향)으로 뻗어 나가 옆 지사 마커를 가리는
+            문제(2026-08-10 피드백)를 막으려고 추가 — 라벨을 원 아래가 아니라 오른쪽
+            (바다 쪽)에 붙인다. 원(=실제 좌표 앵커)의 위치·크기는 그대로다.
             """
             d = 34
             font_size = 13 if badge_count <= 1 else max(8, 13 - (badge_count - 1) * 3)
@@ -1468,19 +1474,26 @@ with tab_disaster:
             label_w = max(d + 6, len(label) * 9 + 10)
             label_h = 15
             gap = 3
-            w, h = max(d, label_w), d + gap + label_h
-            cx, cy = w / 2, d / 2
-            r = d / 2 - 1.5
             badge_e, label_e = html.escape(badge), html.escape(label)
+
+            if label_side == "right":
+                w, h = d + gap + label_w, max(d, label_h)
+                cx, cy = d / 2, h / 2
+                label_x, label_y = d + gap, (h - label_h) / 2
+            else:
+                w, h = max(d, label_w), d + gap + label_h
+                cx, cy = w / 2, d / 2
+                label_x, label_y = cx - label_w / 2, d + gap
+            r = d / 2 - 1.5
             svg = (
                 f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
                 f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" stroke="white" stroke-width="2"/>'
                 f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
                 f'font-size="{font_size}" font-weight="700" fill="white" '
                 f'font-family="sans-serif">{badge_e}</text>'
-                f'<rect x="{cx - label_w / 2}" y="{d + gap}" width="{label_w}" height="{label_h}" '
+                f'<rect x="{label_x}" y="{label_y}" width="{label_w}" height="{label_h}" '
                 f'rx="3" fill="white" fill-opacity="0.85"/>'
-                f'<text x="{cx}" y="{d + gap + label_h / 2}" text-anchor="middle" '
+                f'<text x="{label_x + label_w / 2}" y="{label_y + label_h / 2}" text-anchor="middle" '
                 f'dominant-baseline="central" font-size="{label_font}" font-weight="700" '
                 f'fill="#111" font-family="sans-serif">{label_e}</text>'
                 f'</svg>'
@@ -1496,6 +1509,11 @@ with tab_disaster:
             "대설": "❄️", "건조": "🌵", "안개": "🌫️", "황사": "😷",
             "지진해일": "🌊", "폭풍해일": "🌊",
         }
+
+        # 동해안을 따라 경북(포항)·울산·부산이 위아래로 촘촘히 붙어 있어, 아래쪽으로
+        # 뻗는 기본 라벨이 서쪽(경남 방향)을 가린다는 피드백(2026-08-10) — 이 세
+        # 지사만 라벨을 오른쪽(바다 쪽)으로 돌린다.
+        _LABEL_RIGHT_BRANCHES = {"경북", "울산", "부산"}
 
         _markers = []
         for o in _offices.itertuples():
@@ -1518,7 +1536,9 @@ with tab_disaster:
                 color, badge, label = HW.NORMAL_COLOR, "✅", o.branch
                 distinct_names = []
                 title = f'{o.branch} · 발효 중인 특보 없음'
-            img, w, h, ax, ay = _disaster_marker(color, badge, label, badge_count=max(1, len(distinct_names)))
+            img, w, h, ax, ay = _disaster_marker(
+                color, badge, label, badge_count=max(1, len(distinct_names)),
+                label_side="right" if o.branch in _LABEL_RIGHT_BRANCHES else "bottom")
             _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
                               "ax": ax, "ay": ay, "title": title})
 

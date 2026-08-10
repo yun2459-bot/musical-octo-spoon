@@ -1515,6 +1515,26 @@ with tab_disaster:
         # 지사만 라벨을 오른쪽(바다 쪽)으로 돌린다.
         _LABEL_RIGHT_BRANCHES = {"경북", "울산", "부산"}
 
+        # 재해명만으론 "그래서 얼마나 심한지" 안 보인다는 피드백(2026-08-10) — 재해
+        # 종류별로 뜻이 통하는 실측치를 붙인다. 값이 없으면(관측지점에 그 센서가
+        # 없는 경우, 예: 포항 AWS는 강수 센서가 없어 rainfall_mm가 항상 NaN) 억지로
+        # 채우지 않고 재해명만 보여준다 — 없는 값을 지어내지 않는다.
+        _readings = HW.branch_latest_readings().set_index("branch") if not HW.branch_latest_readings().empty else pd.DataFrame()
+
+        def _hazard_value(wrn_label: str, branch: str) -> str:
+            if _readings.empty or branch not in _readings.index:
+                return ""
+            r = _readings.loc[branch]
+            if wrn_label == "폭염" and pd.notna(r.get("apparent_temp")):
+                return f" 체감{r['apparent_temp']:.1f}℃"
+            if wrn_label == "한파" and pd.notna(r.get("temperature")):
+                return f" {r['temperature']:.1f}℃"
+            if wrn_label == "호우" and pd.notna(r.get("rainfall_mm")):
+                return f" {r['rainfall_mm']:.0f}mm"
+            if wrn_label in ("강풍", "태풍") and pd.notna(r.get("wind_speed")):
+                return f" {r['wind_speed']:.1f}m/s"
+            return ""
+
         _markers = []
         for o in _offices.itertuples():
             hazards = _by_branch.get(o.branch, [])
@@ -1529,7 +1549,7 @@ with tab_disaster:
                 # 처럼 동시 발효된 다른 종류가 묻힌다(2026-08-10 피드백) — 색은 최고
                 # 등급 기준으로 두되, 이모지는 발효 중인 종류 전부를 이어 붙인다.
                 badge = "".join(_WRN_EMOJI.get(n, "⚠️") for n in distinct_names)
-                names = "·".join(distinct_names)
+                names = "·".join(f"{n}{_hazard_value(n, o.branch)}" for n in distinct_names)
                 label = f"{o.branch} {names}"
                 title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건)'
             else:
@@ -1570,7 +1590,27 @@ with tab_disaster:
         </script>
         """
         components.html(_map_html, height=665, scrolling=False)
-        st.caption("배지 숫자 = 동시 발효 중인 특보 개수. 마커에 마우스를 올리면 종류·등급이 보입니다.")
+
+        _color_legend = [(HW.NORMAL_COLOR, "정상"), (HW.ADV_LEVEL_COLOR["주의보"], "주의보"),
+                          (HW.ADV_LEVEL_COLOR["경보"], "경보"), (HW.ADV_LEVEL_COLOR["중대경보"], "중대경보")]
+        _color_html = "".join(
+            f'<span style="display:inline-flex; align-items:center; margin-right:18px;">'
+            f'<span style="display:inline-block; width:10px; height:10px; border-radius:50%; '
+            f'background:{color}; margin-right:6px;"></span>{label}</span>'
+            for color, label in _color_legend
+        )
+        _icon_html = "".join(
+            f'<span style="display:inline-flex; align-items:center; margin-right:14px;">'
+            f'{emoji}&nbsp;{name}</span>'
+            for name, emoji in _WRN_EMOJI.items()
+        )
+        st.markdown(
+            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-top:6px;">{_color_html}</div>'
+            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-top:6px; '
+            f'font-size:13px; color:#333;">{_icon_html}</div>',
+            unsafe_allow_html=True)
+        st.caption("원 색 = 그 지사에서 가장 높은 등급. 배지 이모지 = 동시 발효 중인 재해 전부. "
+                   "마커에 마우스를 올리면 상세(종류·등급·건수)가 보입니다.")
 
     st.markdown("---")
     st.subheader("발효 현황 표")

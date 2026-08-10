@@ -163,6 +163,24 @@ def branch_office_coords() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def branch_latest_readings() -> pd.DataFrame:
+    """지사별 대표 실측값(지사 내 최댓값 = 가장 심한 조건) — 재해 지도에서 재해명
+    옆에 실제 수치(체감온도/강수량/풍속)를 같이 보여주는 데 쓴다.
+
+    rainfall_mm/wind_speed는 2026-08-10에 추가된 컬럼이라 옛날 행에는 NULL이다 —
+    groupby().max()는 NaN을 알아서 건너뛰므로 별도 처리가 필요 없다.
+    """
+    cols = ["branch", "apparent_temp", "temperature", "rainfall_mm", "wind_speed"]
+    obs = load_observations()
+    if obs.empty:
+        return pd.DataFrame(columns=cols)
+    latest = latest_by_key(obs)
+    agg_cols = {c: (c, "max") for c in cols[1:] if c in latest.columns}
+    if not agg_cols:
+        return pd.DataFrame(columns=cols)
+    return latest.groupby("branch").agg(**agg_cols).reset_index()
+
+
 def active_advisories_by_branch() -> pd.DataFrame:
     """지금 발효 중인 특보(폭염 포함 12종 전체)를 지사·도시 단위로 매칭해 반환.
 

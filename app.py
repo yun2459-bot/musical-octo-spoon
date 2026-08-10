@@ -1437,7 +1437,12 @@ with tab4:
 # 프로토콜(카카오 친구톡/RCS/에스컬레이션 등, [[project-disaster-alert-system-design]]
 # 참고)은 이 화면이 자리잡은 뒤로 미룬다. 폭염 대응(tab4)과 완전히 별개 탭 — 기존
 # 폭염 파이프라인/화면은 건드리지 않는다.
-with tab_disaster:
+#
+# 2026-08-10: 전사현황/지사상세/점검편향분석(tab1~3)과 같은 2차 비밀번호
+# (ANALYSIS_PASSWORD)로 같이 잠가달라는 요청 — 함수로 감싸서 본문 들여쓰기를
+# 안 건드리고 아래(함수 정의 뒤)에서 잠금 여부에 따라 호출하거나 게이트를
+# 보여주게 했다. 폭염 대응(tab4)은 계속 APP_PASSWORD만으로 열린다.
+def _render_disaster_tab():
     st.subheader("🌪️ 자연재해 통합경보 (1단계 — 발효 현황)")
     st.caption("기상청이 지금 발효 중인 특보(폭염 포함 12종)를 지사별로 모았습니다. "
                "폭염 대응 탭과는 별개로, 태풍·호우·한파 등 다른 재해까지 확장한 화면입니다.")
@@ -1651,6 +1656,13 @@ with tab_disaster:
                     .reset_index(name="건수").sort_values(["재해", "등급"]))
         st.caption("종류별 발효 건수: " + ", ".join(
             f"{r.재해} {r.등급} {r.건수}건" for r in _summary.itertuples()))
+
+
+with tab_disaster:
+    if _analysis_unlocked():
+        _render_disaster_tab()
+    else:
+        _analysis_gate("tab_disaster")
 
 
 # ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트

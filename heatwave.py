@@ -142,6 +142,26 @@ WRN_LABELS = {
     "H": "폭염", "F": "안개",
 }
 
+# 기상청 공식 특보 등급(폭염 내부 3단계 LEVEL_COLOR와는 다른 체계) — 표·지도가
+# 색을 공유하도록 여기 한 곳에 정의.
+ADV_LEVEL_ORDER = ["주의보", "경보", "중대경보"]
+ADV_LEVEL_COLOR = {"주의보": "#f4d35e", "경보": "#f2a154", "중대경보": "#c81d25"}
+
+
+def branch_office_coords() -> pd.DataFrame:
+    """지사별 사무실 좌표(branch, city, lat, lon) — map_clusters()의 사무실 선정 로직과
+    동일하게, office 지정 도시가 없으면 그 지사의 첫 도시로 대체한다.
+    """
+    cities = load_branch_cities()
+    if cities.empty:
+        return pd.DataFrame(columns=["branch", "city", "lat", "lon"])
+    rows = []
+    for branch, grp in cities.groupby("branch", sort=False):
+        office_rows = grp[grp["office"]]
+        office = office_rows.iloc[0] if not office_rows.empty else grp.iloc[0]
+        rows.append({"branch": branch, "city": office["city"], "lat": office["lat"], "lon": office["lon"]})
+    return pd.DataFrame(rows)
+
 
 def active_advisories_by_branch() -> pd.DataFrame:
     """지금 발효 중인 특보(폭염 포함 12종 전체)를 지사·도시 단위로 매칭해 반환.

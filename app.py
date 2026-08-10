@@ -1431,28 +1431,113 @@ with tab4:
                                     f"{f['name']}: {f['reason']}" for f in _send_result["failed"]))
 
 # ============================================================ TAB 자연재해 통합경보
-# 1단계(2026-08-07): 폭염 외 11종 기상특보(태풍/호우/한파 등)를 지도 대신 우선
-# 표 형태로 보여준다 — 지사×재해유형×등급 매칭이 실데이터로 맞는지 먼저 확인하고,
-# 검증되면 지도 배지로 옮기는 순서로 "천천히" 진행하기로 함(사용자 요청).
-# 폭염 대응(tab4)과 별개 탭으로 분리 — 기존 폭염 파이프라인/화면은 건드리지 않는다.
+# 1단계(2026-08-07 표 -> 지도 배지로 승격): 폭염 외 11종 기상특보(태풍/호우/한파 등)를
+# 지사별 지도 위에 표시한다. 표 버전으로 지사×재해×등급 매칭이 실데이터로 맞는 것까지
+# 확인된 뒤 진행 — "사이트가 구축되고 효율적인지가 먼저"라는 사용자 판단에 따라 경보
+# 프로토콜(카카오 친구톡/RCS/에스컬레이션 등, [[project-disaster-alert-system-design]]
+# 참고)은 이 화면이 자리잡은 뒤로 미룬다. 폭염 대응(tab4)과 완전히 별개 탭 — 기존
+# 폭염 파이프라인/화면은 건드리지 않는다.
 with tab_disaster:
     st.subheader("🌪️ 자연재해 통합경보 (1단계 — 발효 현황)")
     st.caption("기상청이 지금 발효 중인 특보(폭염 포함 12종)를 지사별로 모았습니다. "
                "폭염 대응 탭과는 별개로, 태풍·호우·한파 등 다른 재해까지 확장한 화면입니다.")
 
     _adv = HW.active_advisories_by_branch()
+    _kakao_key = st.secrets.get("KAKAO_JS_KEY", "")
+    _offices = HW.branch_office_coords()
+
+    if not _kakao_key:
+        st.info("카카오맵 API 키(KAKAO_JS_KEY)가 secrets에 없어 지도를 표시할 수 없습니다.")
+    elif _offices.empty:
+        st.info("사업장 좌표가 없습니다. `config/sites.yaml`을 확인해주세요.")
+    else:
+        _by_branch = {b: g[["wrn_label", "level"]].to_dict("records")
+                      for b, g in _adv.groupby("branch")} if not _adv.empty else {}
+        _rank = {lvl: i for i, lvl in enumerate(HW.ADV_LEVEL_ORDER)}
+
+        def _disaster_marker(color: str, badge: str, label: str):
+            """재해 지도 전용 마커 — 폭염 지도의 SVG 배지 기법을 그대로 쓰되, 추정치
+            점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전."""
+            d, font_size, label_font = 34, 13, 10
+            label_w = max(d + 6, len(label) * 9 + 10)
+            label_h = 15
+            gap = 3
+            w, h = max(d, label_w), d + gap + label_h
+            cx, cy = w / 2, d / 2
+            r = d / 2 - 1.5
+            badge_e, label_e = html.escape(badge), html.escape(label)
+            svg = (
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
+                f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" stroke="white" stroke-width="2"/>'
+                f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
+                f'font-size="{font_size}" font-weight="700" fill="white" '
+                f'font-family="sans-serif">{badge_e}</text>'
+                f'<rect x="{cx - label_w / 2}" y="{d + gap}" width="{label_w}" height="{label_h}" '
+                f'rx="3" fill="white" fill-opacity="0.85"/>'
+                f'<text x="{cx}" y="{d + gap + label_h / 2}" text-anchor="middle" '
+                f'dominant-baseline="central" font-size="{label_font}" font-weight="700" '
+                f'fill="#111" font-family="sans-serif">{label_e}</text>'
+                f'</svg>'
+            )
+            uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+            return uri, round(w), round(h), round(cx), round(cy)
+
+        _markers = []
+        for o in _offices.itertuples():
+            hazards = _by_branch.get(o.branch, [])
+            if hazards:
+                worst = max(hazards, key=lambda h: _rank.get(h["level"], -1))
+                color = HW.ADV_LEVEL_COLOR.get(worst["level"], "#888")
+                badge = str(len(hazards))
+                names = "·".join(sorted({h["wrn_label"] for h in hazards}))
+                title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건)'
+            else:
+                color, badge, names = HW.NORMAL_COLOR, "–", "정상"
+                title = f'{o.branch} · 발효 중인 특보 없음'
+            img, w, h, ax, ay = _disaster_marker(color, badge, o.branch)
+            _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
+                              "ax": ax, "ay": ay, "title": title})
+
+        _markers_json = json.dumps(_markers, ensure_ascii=False).replace("</", "<\\/")
+        _map_html = f"""
+        <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+        <div id="disasterMap" style="width:100%; height:650px; border-radius:8px;"></div>
+        <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={_kakao_key}&autoload=false"></script>
+        <script>
+        kakao.maps.load(function () {{
+            var container = document.getElementById('disasterMap');
+            var map = new kakao.maps.Map(container, {{
+                center: new kakao.maps.LatLng(36.2, 127.9), level: 12,
+            }});
+            map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+            var markers = {_markers_json};
+            var bounds = new kakao.maps.LatLngBounds();
+            markers.forEach(function (m) {{
+                var pos = new kakao.maps.LatLng(m.lat, m.lon);
+                bounds.extend(pos);
+                var image = new kakao.maps.MarkerImage(
+                    m.img, new kakao.maps.Size(m.w, m.h), {{offset: new kakao.maps.Point(m.ax, m.ay)}});
+                new kakao.maps.Marker({{position: pos, map: map, image: image, title: m.title}});
+            }});
+            function fitMap() {{ map.relayout(); map.setBounds(bounds); }}
+            fitMap();
+            new ResizeObserver(fitMap).observe(container);
+        }});
+        </script>
+        """
+        components.html(_map_html, height=665, scrolling=False)
+        st.caption("배지 숫자 = 동시 발효 중인 특보 개수. 마커에 마우스를 올리면 종류·등급이 보입니다.")
+
+    st.markdown("---")
+    st.subheader("발효 현황 표")
     if _adv.empty:
         st.success("✅ 현재 발효 중인 특보가 없습니다.")
     else:
-        _ADV_LEVEL_COLOR = {"주의보": "#f4d35e", "경보": "#f2a154", "중대경보": "#c81d25"}
-        _adv_display = _adv.copy()
-        _adv_display["재해"] = _adv_display["wrn_label"]
-        _adv_display["지사"] = _adv_display["branch"]
-        _adv_display["사업장"] = _adv_display["city"]
-        _adv_display["등급"] = _adv_display["level"]
+        _adv_display = _adv.rename(
+            columns={"branch": "지사", "city": "사업장", "wrn_label": "재해", "level": "등급"})
 
         def _level_style(row: pd.Series) -> list[str]:
-            color = _ADV_LEVEL_COLOR.get(row["등급"], "#888")
+            color = HW.ADV_LEVEL_COLOR.get(row["등급"], "#888")
             return [f"background-color:{color}22" for _ in row]
 
         st.dataframe(
@@ -1463,9 +1548,6 @@ with tab_disaster:
                     .reset_index(name="건수").sort_values(["재해", "등급"]))
         st.caption("종류별 발효 건수: " + ", ".join(
             f"{r.재해} {r.등급} {r.건수}건" for r in _summary.itertuples()))
-
-    st.markdown("---")
-    st.caption("다음 단계: 이 데이터가 실데이터와 맞는지 확인되면 지도 위 배지 표시로 옮길 예정입니다.")
 
 
 # ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트

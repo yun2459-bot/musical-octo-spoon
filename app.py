@@ -1482,19 +1482,33 @@ with tab_disaster:
             uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
             return uri, round(w), round(h), round(cx), round(cy)
 
+        # 배지에 숫자(동시 건수)만 있으면 무슨 재해인지 알려고 아래 표까지 내려가야
+        # 했다("경인 6"이 뭔지 안 보임, 2026-08-07 피드백) — 이모지+라벨에 재해명을
+        # 직접 박아 지도만 보고 바로 알 수 있게 바꿨다.
+        _WRN_EMOJI = {
+            "폭염": "🌡️", "호우": "🌧️", "태풍": "🌀", "강풍": "💨", "한파": "❄️",
+            "대설": "❄️", "건조": "🌵", "안개": "🌫️", "황사": "😷",
+            "지진해일": "🌊", "폭풍해일": "🌊",
+        }
+
         _markers = []
         for o in _offices.itertuples():
             hazards = _by_branch.get(o.branch, [])
             if hazards:
                 worst = max(hazards, key=lambda h: _rank.get(h["level"], -1))
                 color = HW.ADV_LEVEL_COLOR.get(worst["level"], "#888")
-                badge = str(len(hazards))
-                names = "·".join(sorted({h["wrn_label"] for h in hazards}))
+                badge = _WRN_EMOJI.get(worst["wrn_label"], "⚠️")
+                # 같은 재해가 지사 내 여러 도시·시간대에 걸쳐 여러 행으로 잡힐 수 있어
+                # (예: 경인 4개 도시 전부 폭염이면 4행) 종류 이름은 중복 제거한다 —
+                # 안 그러면 "폭염 +5종"처럼 실제로는 1종인데 여러 종인 것처럼 보인다.
+                distinct_names = sorted({h["wrn_label"] for h in hazards})
+                names = "·".join(distinct_names)
+                label = f"{o.branch} {names}"
                 title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건)'
             else:
-                color, badge, names = HW.NORMAL_COLOR, "–", "정상"
+                color, badge, label = HW.NORMAL_COLOR, "✅", o.branch
                 title = f'{o.branch} · 발효 중인 특보 없음'
-            img, w, h, ax, ay = _disaster_marker(color, badge, o.branch)
+            img, w, h, ax, ay = _disaster_marker(color, badge, label)
             _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
                               "ax": ax, "ay": ay, "title": title})
 

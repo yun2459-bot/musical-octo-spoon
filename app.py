@@ -1605,8 +1605,8 @@ with tab_disaster:
         }});
         </script>
         """
-        components.html(_map_html, height=665, scrolling=False)
-
+        # 범례를 지도 위로(2026-08-10 피드백) — 렌더링 순서만 바꾸면 되므로 지도
+        # components.html 호출보다 먼저 그린다. 회색 설명 캡션은 요청대로 없앴다.
         _color_legend = [(HW.NORMAL_COLOR, "정상"), (HW.ADV_LEVEL_COLOR["주의보"], "주의보"),
                           (HW.ADV_LEVEL_COLOR["경보"], "경보"), (HW.ADV_LEVEL_COLOR["중대경보"], "중대경보")]
         _color_html = "".join(
@@ -1621,12 +1621,11 @@ with tab_disaster:
             for name, emoji in _WRN_EMOJI.items()
         )
         st.markdown(
-            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-top:6px;">{_color_html}</div>'
-            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-top:6px; '
+            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:4px;">{_color_html}</div>'
+            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:8px; '
             f'font-size:13px; color:#333;">{_icon_html}</div>',
             unsafe_allow_html=True)
-        st.caption("원 색 = 그 지사에서 가장 높은 등급. 배지 이모지 = 동시 발효 중인 재해 전부. "
-                   "마커에 마우스를 올리면 상세(종류·등급·건수)가 보입니다.")
+        components.html(_map_html, height=665, scrolling=False)
 
     st.markdown("---")
     st.subheader("발효 현황 표")

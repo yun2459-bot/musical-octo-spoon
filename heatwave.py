@@ -253,8 +253,15 @@ def branch_checklist_today() -> pd.DataFrame:
 # heatwave_data/alerts.db는 못 고치므로(그건 "온도를 조져보자" 로컬 스케줄러가
 # 동기화하는 읽기전용 스냅샷), 엑셀 일괄 사진 등록과 같은 방식으로 GitHub
 # Contents API를 통해 이 저장소에 직접 커밋한다(GITHUB_TOKEN 재사용).
+#
+# 2026-08-10: 처음엔 "완료했다/안 했다" 한 줄만 남겼는데, "점검을 했다는 사실"이
+# 아니라 "점검 결과(항목별 정상/이상)"까지 통합 관리하는 게 핵심이라는 요청으로
+# 항목 하나당 한 행(long format)으로 바꿨다 — 나중에 "이상" 항목만 모아 CSO
+# 보고서에 낼 수 있게 구조를 갖춰둔다.
 CHECKLIST_LOG_CSV = "heatwave_data/checklist_completions.csv"
-CHECKLIST_LOG_COLS = ["branch", "checked_at", "checked_by", "note"]
+CHECKLIST_LOG_COLS = ["branch", "checked_at", "checked_by", "wrn_label", "level",
+                      "item_id", "item_label", "result", "note"]
+CHECKLIST_RESULTS = ["정상", "이상"]
 
 
 @st.cache_data(ttl=60)
@@ -273,7 +280,7 @@ def load_checklist_completions() -> pd.DataFrame:
 
 
 def branches_checked_today() -> set[str]:
-    """오늘 날짜(KST)로 "점검 완료"가 기록된 지사 집합 — 지도 마커의 테두리/아이콘에 쓴다."""
+    """오늘 날짜(KST)로 점검 기록(항목 1개 이상)이 있는 지사 집합."""
     df = load_checklist_completions()
     if df.empty:
         return set()
@@ -281,21 +288,42 @@ def branches_checked_today() -> set[str]:
     return set(df[df["checked_at"].dt.date == today]["branch"])
 
 
-def submit_checklist_completion(branch: str, checked_by: str, note: str = "") -> None:
-    """그 지사 담당자가 "오늘 점검 완료"를 눌렀을 때 기록. 재해별 세분화 없이
-    지사·날짜 단위로만 남긴다 — 지도 표시가 "하나라도 미점검이면 지사 전체
-    미점검"으로 단순화돼 있어(2026-08-10 설계), 세분화된 기록은 지금은 과함.
+def branch_checklist_status_today() -> dict[str, str]:
+    """지사별 오늘 점검 상태 — "미점검"/"정상"/"이상" 3단계.
+
+    항목 중 하나라도 "이상"이면 그 지사는 "이상"(지도에서 가장 눈에 띄어야
+    하는 상태) — 전부 "정상"이어야만 "정상"으로 본다.
     """
-    record = {"branch": branch, "checked_at": now_kst().isoformat(timespec="seconds"),
-               "checked_by": checked_by, "note": note}
+    df = load_checklist_completions()
+    if df.empty:
+        return {}
+    today = now_kst().date()
+    today_df = df[df["checked_at"].dt.date == today]
+    status = {}
+    for branch, grp in today_df.groupby("branch"):
+        status[branch] = "이상" if (grp["result"] == "이상").any() else "정상"
+    return status
+
+
+def submit_checklist_results(branch: str, checked_by: str, results: list[dict]) -> None:
+    """지사 담당자가 항목별 점검 결과를 제출했을 때 기록 — 항목당 한 행씩 추가.
+
+    results: [{"wrn_label":..., "level":..., "item_id":..., "item_label":...,
+               "result": "정상"|"이상", "note": str}, ...]
+    """
+    checked_at = now_kst().isoformat(timespec="seconds")
+    new_rows = [{"branch": branch, "checked_at": checked_at, "checked_by": checked_by,
+                 **{k: r.get(k, "") for k in ("wrn_label", "level", "item_id", "item_label", "result", "note")}}
+                for r in results]
     existing_bytes, sha = _github_get_file(CHECKLIST_LOG_CSV)
     if existing_bytes:
         existing_df = pd.read_csv(io.BytesIO(existing_bytes))
     else:
         existing_df = pd.DataFrame(columns=CHECKLIST_LOG_COLS)
-    updated_df = pd.concat([existing_df, pd.DataFrame([record])], ignore_index=True)
+    updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
     csv_bytes = updated_df[CHECKLIST_LOG_COLS].to_csv(index=False).encode("utf-8")
-    _github_put_file(CHECKLIST_LOG_CSV, csv_bytes, f"점검 완료: {branch} ({checked_by})", sha=sha)
+    _github_put_file(CHECKLIST_LOG_CSV, csv_bytes,
+                      f"점검 결과 기록: {branch} ({checked_by}, {len(results)}개 항목)", sha=sha)
     load_checklist_completions.clear()
 
 

@@ -1455,10 +1455,16 @@ with tab_disaster:
                       for b, g in _adv.groupby("branch")} if not _adv.empty else {}
         _rank = {lvl: i for i, lvl in enumerate(HW.ADV_LEVEL_ORDER)}
 
-        def _disaster_marker(color: str, badge: str, label: str):
+        def _disaster_marker(color: str, badge: str, label: str, badge_count: int = 1):
             """재해 지도 전용 마커 — 폭염 지도의 SVG 배지 기법을 그대로 쓰되, 추정치
-            점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전."""
-            d, font_size, label_font = 34, 13, 10
+            점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전.
+
+            badge_count(동시 발효 재해 종류 수)가 늘어나면 이모지를 다 이어 붙인 배지가
+            원보다 커지므로, 그만큼 글자 크기를 줄여 원 안에 최대한 담는다.
+            """
+            d = 34
+            font_size = 13 if badge_count <= 1 else max(8, 13 - (badge_count - 1) * 3)
+            label_font = 10
             label_w = max(d + 6, len(label) * 9 + 10)
             label_h = 15
             gap = 3
@@ -1497,18 +1503,22 @@ with tab_disaster:
             if hazards:
                 worst = max(hazards, key=lambda h: _rank.get(h["level"], -1))
                 color = HW.ADV_LEVEL_COLOR.get(worst["level"], "#888")
-                badge = _WRN_EMOJI.get(worst["wrn_label"], "⚠️")
                 # 같은 재해가 지사 내 여러 도시·시간대에 걸쳐 여러 행으로 잡힐 수 있어
                 # (예: 경인 4개 도시 전부 폭염이면 4행) 종류 이름은 중복 제거한다 —
                 # 안 그러면 "폭염 +5종"처럼 실제로는 1종인데 여러 종인 것처럼 보인다.
                 distinct_names = sorted({h["wrn_label"] for h in hazards})
+                # 배지에 최고 등급 재해 하나만 보이면 "경북 폭염·호우인데 배지는 호우만"
+                # 처럼 동시 발효된 다른 종류가 묻힌다(2026-08-10 피드백) — 색은 최고
+                # 등급 기준으로 두되, 이모지는 발효 중인 종류 전부를 이어 붙인다.
+                badge = "".join(_WRN_EMOJI.get(n, "⚠️") for n in distinct_names)
                 names = "·".join(distinct_names)
                 label = f"{o.branch} {names}"
                 title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건)'
             else:
                 color, badge, label = HW.NORMAL_COLOR, "✅", o.branch
+                distinct_names = []
                 title = f'{o.branch} · 발효 중인 특보 없음'
-            img, w, h, ax, ay = _disaster_marker(color, badge, label)
+            img, w, h, ax, ay = _disaster_marker(color, badge, label, badge_count=max(1, len(distinct_names)))
             _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
                               "ax": ax, "ay": ay, "title": title})
 

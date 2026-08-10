@@ -1450,6 +1450,9 @@ def _render_disaster_tab():
     _adv = HW.active_advisories_by_branch()
     _kakao_key = st.secrets.get("KAKAO_JS_KEY", "")
     _offices = HW.branch_office_coords()
+    # "특보가 갔다"보다 "지사가 점검을 마쳤다"가 핵심이라는 요청(2026-08-10) —
+    # 지도에서 바로 구분되게 미점검 지사는 원 테두리를 굵은 빨강으로 강조한다.
+    _checked_branches = HW.branches_checked_today()
 
     if not _kakao_key:
         st.info("카카오맵 API 키(KAKAO_JS_KEY)가 secrets에 없어 지도를 표시할 수 없습니다.")
@@ -1461,7 +1464,8 @@ def _render_disaster_tab():
         _rank = {lvl: i for i, lvl in enumerate(HW.ADV_LEVEL_ORDER)}
 
         def _disaster_marker(color: str, badge: str, label: str, badge_count: int = 1,
-                              label_side: str = "bottom", anchor_dx: int = 0):
+                              label_side: str = "bottom", anchor_dx: int = 0,
+                              stroke_color: str = "white", stroke_width: float = 2):
             """재해 지도 전용 마커 — 폭염 지도의 SVG 배지 기법을 그대로 쓰되, 추정치
             점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전.
 
@@ -1501,7 +1505,8 @@ def _render_disaster_tab():
             r = d / 2 - 1.5
             svg = (
                 f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
-                f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" stroke="white" stroke-width="2"/>'
+                f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" '
+                f'stroke="{stroke_color}" stroke-width="{stroke_width}"/>'
                 f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
                 f'font-size="{font_size}" font-weight="700" fill="white" '
                 f'font-family="sans-serif">{badge_e}</text>'
@@ -1562,6 +1567,7 @@ def _render_disaster_tab():
         _markers = []
         for o in _offices.itertuples():
             hazards = _by_branch.get(o.branch, [])
+            stroke_color, stroke_width = "white", 2
             if hazards:
                 worst = max(hazards, key=lambda h: _rank.get(h["level"], -1))
                 color = HW.ADV_LEVEL_COLOR.get(worst["level"], "#888")
@@ -1574,8 +1580,16 @@ def _render_disaster_tab():
                 # 등급 기준으로 두되, 이모지는 발효 중인 종류 전부를 이어 붙인다.
                 badge = "".join(_WRN_EMOJI.get(n, "⚠️") for n in distinct_names)
                 names = "·".join(f"{n}{_hazard_value(n, o.branch)}" for n in distinct_names)
-                label = f"{o.branch} {names}"
-                title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건)'
+                # 핵심은 "특보가 갔다"가 아니라 "지사가 점검을 마쳤다"라는 요청
+                # (2026-08-10) — 오늘 점검완료 기록이 없으면 굵은 빨강 테두리 +
+                # ⏳ 로 눈에 띄게, 완료했으면 흰 테두리 + ✅.
+                if o.branch in _checked_branches:
+                    prefix = "✅ "
+                else:
+                    prefix, stroke_color, stroke_width = "⏳ ", "#c81d25", 4
+                label = f"{prefix}{o.branch} {names}"
+                title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건) · ' + (
+                    "오늘 점검 완료" if o.branch in _checked_branches else "점검 미완료")
             else:
                 color, badge, label = HW.NORMAL_COLOR, "✅", o.branch
                 distinct_names = []
@@ -1583,7 +1597,8 @@ def _render_disaster_tab():
             img, w, h, ax, ay = _disaster_marker(
                 color, badge, label, badge_count=max(1, len(distinct_names)),
                 label_side=_LABEL_SIDE_OVERRIDE.get(o.branch, "bottom"),
-                anchor_dx=_ANCHOR_DX_OVERRIDE.get(o.branch, 0))
+                anchor_dx=_ANCHOR_DX_OVERRIDE.get(o.branch, 0),
+                stroke_color=stroke_color, stroke_width=stroke_width)
             _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
                               "ax": ax, "ay": ay, "title": title})
 
@@ -1629,10 +1644,18 @@ def _render_disaster_tab():
             f'{emoji}&nbsp;{name}</span>'
             for name, emoji in _WRN_EMOJI.items()
         )
+        _check_html = (
+            '<span style="display:inline-flex; align-items:center; margin-right:14px;">'
+            '✅&nbsp;오늘 점검 완료</span>'
+            '<span style="display:inline-flex; align-items:center;">'
+            '⏳&nbsp;점검 미완료(테두리 빨강)</span>'
+        )
         st.markdown(
             f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:4px;">{_color_html}</div>'
+            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:4px; '
+            f'font-size:13px; color:#333;">{_icon_html}</div>'
             f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:8px; '
-            f'font-size:13px; color:#333;">{_icon_html}</div>',
+            f'font-size:13px; color:#333;">{_check_html}</div>',
             unsafe_allow_html=True)
         components.html(_map_html, height=665, scrolling=False)
 
@@ -1656,6 +1679,40 @@ def _render_disaster_tab():
                     .reset_index(name="건수").sort_values(["재해", "등급"]))
         st.caption("종류별 발효 건수: " + ", ".join(
             f"{r.재해} {r.등급} {r.건수}건" for r in _summary.itertuples()))
+
+    # ------------------------------------------------------- 지사별 점검 체크리스트
+    # "특보가 갔다"가 아니라 "지사가 점검을 마쳤다"까지 관리하는 게 핵심이라는
+    # 요청(2026-08-10) — 재해유형×등급에 맞는 점검 항목을 보여주고, 완료 버튼을
+    # 누르면 GitHub에 기록(엑셀 일괄 사진 등록과 같은 방식, GITHUB_TOKEN 재사용)
+    # 돼 지도 마커 테두리에 바로 반영된다.
+    st.markdown("---")
+    st.subheader("✅ 지사별 점검 체크리스트")
+    _checklist = HW.branch_checklist_today()
+    _hazard_branches = sorted(_adv["branch"].unique()) if not _adv.empty else []
+    if not _hazard_branches:
+        st.success("발효 중인 특보가 없어 오늘은 점검이 필요한 지사가 없습니다.")
+    else:
+        _cl_branch = st.selectbox("지사 선택", _hazard_branches, key="_checklist_branch")
+        _cl_items = _checklist[_checklist["branch"] == _cl_branch] if not _checklist.empty else _checklist
+        if _cl_items.empty:
+            st.warning(f"{_cl_branch} 지사의 현재 특보에 대한 점검 항목이 아직 정의돼 있지 않습니다 "
+                       "(근거 자료 확인 전이라 항목을 임의로 만들지 않았습니다).")
+        else:
+            for r in _cl_items.itertuples():
+                st.markdown(f"- **[{r.wrn_label}/{r.level}]** {r.label}  \n"
+                           f"  <span style='color:#888; font-size:12px;'>근거: {r.source}</span>",
+                           unsafe_allow_html=True)
+        _already = _cl_branch in HW.branches_checked_today()
+        if _already:
+            st.success(f"✅ {_cl_branch} 지사는 오늘 점검 완료로 기록돼 있습니다.")
+        else:
+            _checked_by = st.text_input("담당자 이름", key=f"_checklist_name_{_cl_branch}")
+            if st.button(f"🔒 {_cl_branch} 지사 오늘 점검 완료 기록", key=f"_checklist_submit_{_cl_branch}",
+                        type="primary", disabled=not _checked_by.strip()):
+                with st.spinner("기록 중..."):
+                    HW.submit_checklist_completion(_cl_branch, _checked_by.strip())
+                st.success("기록됐습니다. 지도가 곧 반영됩니다.")
+                st.rerun()
 
 
 with tab_disaster:

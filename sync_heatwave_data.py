@@ -20,6 +20,7 @@ DEST = Path(__file__).parent / "heatwave_data"
 FILES = [
     SOURCE / "data" / "alerts.db",
     SOURCE / "config" / "sites.yaml",
+    SOURCE / "config" / "checklist_pool.yaml",  # 재해별 점검항목 풀(2026-08-10) — PII 없음, 그대로 복사
     SOURCE / "Map_of_South_Korea-blank.svg",
 ]
 

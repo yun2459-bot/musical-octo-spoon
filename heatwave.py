@@ -206,6 +206,99 @@ def active_advisories_by_branch() -> pd.DataFrame:
     return merged[cols].sort_values(["branch", "city"]).reset_index(drop=True)
 
 
+# ------------------------------------------------------------- 재해별 점검 체크리스트
+# "특보가 갔다"가 아니라 "지사가 그에 맞춰 점검을 마쳤다"까지 관리하는 게 이
+# 화면의 핵심이라는 요청(2026-08-10)에 따라 추가. AI/자동화가 즉흥적으로 점검
+# 항목을 만들지 않도록, 미리 정의된 항목 풀(config/checklist_pool.yaml — 고용
+# 노동부 공식자료·세방(주) 온열질환 예방지침 근거)에서 재해유형×등급에 맞는
+# 항목만 조합해서 보여준다. [[project-disaster-alert-system-design]] 참고.
+CHECKLIST_POOL_PATH = HEATWAVE_DATA_DIR / "checklist_pool.yaml"
+
+
+def load_checklist_pool() -> dict:
+    if not CHECKLIST_POOL_PATH.exists():
+        return {}
+    return yaml.safe_load(CHECKLIST_POOL_PATH.read_text(encoding="utf-8")) or {}
+
+
+def branch_checklist_today() -> pd.DataFrame:
+    """지사별로 오늘 발효 중인 특보에 필요한 점검 항목 —
+    (branch, item_id, label, source, wrn_label, level).
+
+    같은 항목이 여러 재해·도시에서 겹쳐 나올 수 있어 (branch, item_id) 기준으로
+    중복을 제거한다. 근거 자료가 없는 재해유형(pool에 없는 wrn 코드)은 항목이
+    안 나온다 — 그 경우는 호출부가 "점검항목 미정"으로 안내한다.
+    """
+    cols = ["branch", "item_id", "label", "source", "wrn_label", "level"]
+    pool = load_checklist_pool()
+    items_meta = pool.get("items", {})
+    adv = active_advisories_by_branch()
+    if adv.empty or not pool:
+        return pd.DataFrame(columns=cols)
+    rows, seen = [], set()
+    for r in adv.itertuples():
+        for item_id in pool.get(r.wrn, {}).get(r.level, []):
+            key = (r.branch, item_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            meta = items_meta.get(item_id, {})
+            rows.append({"branch": r.branch, "item_id": item_id,
+                         "label": meta.get("label", item_id), "source": meta.get("source", ""),
+                         "wrn_label": r.wrn_label, "level": r.level})
+    return pd.DataFrame(rows, columns=cols)
+
+
+# 지사 점검 완료 기록 — 배포된(Streamlit Cloud) 화면에서 버튼을 눌러도 로컬
+# heatwave_data/alerts.db는 못 고치므로(그건 "온도를 조져보자" 로컬 스케줄러가
+# 동기화하는 읽기전용 스냅샷), 엑셀 일괄 사진 등록과 같은 방식으로 GitHub
+# Contents API를 통해 이 저장소에 직접 커밋한다(GITHUB_TOKEN 재사용).
+CHECKLIST_LOG_CSV = "heatwave_data/checklist_completions.csv"
+CHECKLIST_LOG_COLS = ["branch", "checked_at", "checked_by", "note"]
+
+
+@st.cache_data(ttl=60)
+def load_checklist_completions() -> pd.DataFrame:
+    content = _github_read_bytes(CHECKLIST_LOG_CSV)
+    if not content:
+        return pd.DataFrame(columns=CHECKLIST_LOG_COLS)
+    try:
+        df = pd.read_csv(io.BytesIO(content))
+    except Exception:
+        return pd.DataFrame(columns=CHECKLIST_LOG_COLS)
+    if not set(CHECKLIST_LOG_COLS).issubset(df.columns):
+        return pd.DataFrame(columns=CHECKLIST_LOG_COLS)
+    df["checked_at"] = pd.to_datetime(df["checked_at"])
+    return df[CHECKLIST_LOG_COLS]
+
+
+def branches_checked_today() -> set[str]:
+    """오늘 날짜(KST)로 "점검 완료"가 기록된 지사 집합 — 지도 마커의 테두리/아이콘에 쓴다."""
+    df = load_checklist_completions()
+    if df.empty:
+        return set()
+    today = now_kst().date()
+    return set(df[df["checked_at"].dt.date == today]["branch"])
+
+
+def submit_checklist_completion(branch: str, checked_by: str, note: str = "") -> None:
+    """그 지사 담당자가 "오늘 점검 완료"를 눌렀을 때 기록. 재해별 세분화 없이
+    지사·날짜 단위로만 남긴다 — 지도 표시가 "하나라도 미점검이면 지사 전체
+    미점검"으로 단순화돼 있어(2026-08-10 설계), 세분화된 기록은 지금은 과함.
+    """
+    record = {"branch": branch, "checked_at": now_kst().isoformat(timespec="seconds"),
+               "checked_by": checked_by, "note": note}
+    existing_bytes, sha = _github_get_file(CHECKLIST_LOG_CSV)
+    if existing_bytes:
+        existing_df = pd.read_csv(io.BytesIO(existing_bytes))
+    else:
+        existing_df = pd.DataFrame(columns=CHECKLIST_LOG_COLS)
+    updated_df = pd.concat([existing_df, pd.DataFrame([record])], ignore_index=True)
+    csv_bytes = updated_df[CHECKLIST_LOG_COLS].to_csv(index=False).encode("utf-8")
+    _github_put_file(CHECKLIST_LOG_CSV, csv_bytes, f"점검 완료: {branch} ({checked_by})", sha=sha)
+    load_checklist_completions.clear()
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)

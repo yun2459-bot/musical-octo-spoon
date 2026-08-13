@@ -1437,22 +1437,26 @@ with tab4:
 # daily_report.py"가 매일 만드는 뉴스+DART+판결문+날씨 통합 브리핑 이메일과
 # 완전히 같은 내용을 그대로 보여준다 — 대시보드가 직접 API/LLM을 호출하지
 # 않고 미리 만들어진 스냅샷(heatwave_data/daily_briefing_latest.html)만
-# 읽는다(비용 통제, 사용자 지적 반영). 폭염 대응(tab4)과 같은 수준으로
-# APP_PASSWORD만으로 열린다 — 연구용 원자료가 아니라 운영 화면이라 2차
-# 비밀번호(ANALYSIS_PASSWORD) 게이트는 걸지 않는다.
+# 읽는다(비용 통제, 사용자 지적 반영). 뉴스/판결문 원문 등 대외비 성격의
+# 원자료를 포함하고 있어, 사용자 요청(2026-08-13)에 따라 전사현황/지사상세/
+# 점검편향분석(tab1~3)과 같은 2차 비밀번호(ANALYSIS_PASSWORD) 게이트를 건다.
 with tab_briefing:
-    st.subheader("📰 일일 안전보건 브리핑")
-    st.caption("뉴스·DART 공시·판결문·날씨 특보를 종합한 안전보건관리책임자용 일일 브리핑입니다. "
-               "매일 자동 실행되는 온도를 조져보자/daily_report.py가 만든 최신 결과를 그대로 보여줍니다.")
-    _briefing_html, _briefing_mtime = HW.load_daily_briefing_html()
-    if not _briefing_html:
-        st.info("아직 생성된 브리핑이 없습니다. `온도를 조져보자` 프로젝트에서 daily_report.py가 "
-                "한 번 이상 실행된 뒤 sync_heatwave_data.py로 동기화되면 여기 표시됩니다.")
-    else:
-        if _briefing_mtime is not None:
-            st.caption(f"🕒 이 스냅샷 동기화 시각: {_briefing_mtime.strftime('%Y-%m-%d %H:%M')} "
-                       "(브리핑 자체의 수집 기준 시각은 아래 본문 상단에 별도로 표시됩니다)")
-        components.html(_briefing_html, height=1400, scrolling=True)
+    # 2026-08-13 사용자 요청 — 전사현황/지사상세/점검편향분석(tab1~3)과 같은
+    # 2차 비밀번호(ANALYSIS_PASSWORD)로 잠근다. _analysis_gate()가 잠겨 있으면
+    # 입력창을 그리고 False를 돌려주므로, 그 경우 아래 실제 내용은 그리지 않는다.
+    if _analysis_gate("tab_briefing"):
+        st.subheader("📰 일일 안전보건 브리핑")
+        st.caption("뉴스·DART 공시·판결문·날씨 특보를 종합한 안전보건관리책임자용 일일 브리핑입니다. "
+                   "매일 자동 실행되는 온도를 조져보자/daily_report.py가 만든 최신 결과를 그대로 보여줍니다.")
+        _briefing_html, _briefing_mtime = HW.load_daily_briefing_html()
+        if not _briefing_html:
+            st.info("아직 생성된 브리핑이 없습니다. `온도를 조져보자` 프로젝트에서 daily_report.py가 "
+                    "한 번 이상 실행된 뒤 sync_heatwave_data.py로 동기화되면 여기 표시됩니다.")
+        else:
+            if _briefing_mtime is not None:
+                st.caption(f"🕒 이 스냅샷 동기화 시각: {_briefing_mtime.strftime('%Y-%m-%d %H:%M')} "
+                           "(브리핑 자체의 수집 기준 시각은 아래 본문 상단에 별도로 표시됩니다)")
+            components.html(_briefing_html, height=1400, scrolling=True)
 
 
 # ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트

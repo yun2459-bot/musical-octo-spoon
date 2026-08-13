@@ -44,6 +44,12 @@ def now_kst() -> pd.Timestamp:
 HEATWAVE_DATA_DIR = Path(__file__).parent / "heatwave_data"
 ALERTS_DB_PATH = HEATWAVE_DATA_DIR / "alerts.db"
 SITES_YAML_PATH = HEATWAVE_DATA_DIR / "sites.yaml"
+# 일일 안전보건 브리핑(뉴스+DART+판결문+날씨) 최신 스냅샷(2026-08-13 추가) —
+# "온도를 조져보자/daily_report.py"가 매일 실행 때마다 이 파일을 새로 쓰고,
+# sync_heatwave_data.py가 이 저장소로 복사해온다. 대시보드는 이 스냅샷만
+# 읽는다 — 화면을 열 때마다 뉴스/DART/판결문 API와 LLM을 직접 호출하면 비용이
+# 불특정하게 나가기 때문(사용자 지적, 2026-08-13).
+DAILY_BRIEFING_HTML_PATH = HEATWAVE_DATA_DIR / "daily_briefing_latest.html"
 
 # 온열질환·조치 현황 구글폼 응답 시트를 "파일 > 웹에 게시 > CSV"로 발행한 링크.
 GOOGLE_SHEET_CSV_URL = (
@@ -80,6 +86,16 @@ NORMAL_COLOR = "#6fb56f"
 
 def available() -> bool:
     return ALERTS_DB_PATH.exists()
+
+
+def load_daily_briefing_html() -> tuple[str, pd.Timestamp | None]:
+    """일일 안전보건 브리핑 최신 스냅샷 HTML과 그 파일의 수정 시각을 반환.
+    파일이 없으면 (\"\", None) — 호출부가 "아직 실행된 적 없음"으로 안내한다."""
+    if not DAILY_BRIEFING_HTML_PATH.exists():
+        return "", None
+    html = DAILY_BRIEFING_HTML_PATH.read_text(encoding="utf-8")
+    mtime = pd.Timestamp.fromtimestamp(DAILY_BRIEFING_HTML_PATH.stat().st_mtime)
+    return html, mtime
 
 
 def _connect() -> sqlite3.Connection:
@@ -205,37 +221,6 @@ def active_advisories_by_branch() -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
     return merged[cols].sort_values(["branch", "city"]).reset_index(drop=True)
 
-
-# 폭염/한파 영향예보(관심/주의/경고/위험, 오늘/내일) — 2026-08-13 추가. 위 특보
-# (지금 발효된 것만 "떴다/안 떴다")와 달리, 아직 특보가 안 떴어도 내일 위험해질
-# 수 있는지 미리 알려주는 예보성 지표다(사용자 요청: "특보가 아직 안 떴어도
-# '내일 위험해질 수 있다'를 먼저 알려주는 게 내가 기상에서 원하는 것"). 현재
-# 기상청이 폭염·한파 두 가지만 제공하며(2026-08-13 확인), 이 대시보드는 아직
-# 폭염만 조회한다(온도를 조져보자/src/impact_forecast.py, main.py 참고).
-IMPACT_LEVEL_ORDER = ["관심", "주의", "경고", "위험"]
-IMPACT_LEVEL_COLOR = {"관심": "#3b82f6", "주의": "#eab308", "경고": "#f97316", "위험": "#dc2626"}
-
-
-def active_heat_impact_by_branch() -> pd.DataFrame:
-    """폭염 위험수준 예보(오늘/내일)를 지사·도시 단위로 매칭해 반환.
-    active_advisories_by_branch()와 완전히 같은 방식(region_id 매칭, heat_impact
-    테이블도 main.py가 매 주기 통째로 교체하는 스냅샷)."""
-    cols = ["branch", "city", "region_id", "field", "level", "forecast_day"]
-    cities = load_branch_cities()
-    if cities.empty or "region_id" not in cities.columns:
-        return pd.DataFrame(columns=cols)
-    try:
-        with _connect() as conn:
-            imp = pd.read_sql("SELECT * FROM heat_impact", conn)
-    except Exception:
-        return pd.DataFrame(columns=cols)
-    if imp.empty:
-        return pd.DataFrame(columns=cols)
-    merged = cities.dropna(subset=["region_id"])[["branch", "city", "region_id"]].merge(
-        imp, on="region_id", how="inner")
-    if merged.empty:
-        return pd.DataFrame(columns=cols)
-    return merged[cols].sort_values(["branch", "city"]).reset_index(drop=True)
 
 
 # ------------------------------------------------------------- 재해별 점검 체크리스트

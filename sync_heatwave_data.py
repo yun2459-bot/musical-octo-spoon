@@ -21,6 +21,11 @@ FILES = [
     SOURCE / "data" / "alerts.db",
     SOURCE / "config" / "sites.yaml",
     SOURCE / "config" / "checklist_pool.yaml",  # 재해별 점검항목 풀(2026-08-10) — PII 없음, 그대로 복사
+    # 일일 안전보건 브리핑(뉴스+DART+판결문+날씨) 최신 스냅샷(2026-08-13 추가) —
+    # "📰 일일 안전보건 브리핑" 탭이 그대로 읽어서 보여준다. 뉴스 제목/URL,
+    # DART 공시, 판례 사건명/URL, 특보만 담겨 있고 개인정보(수신자 이름·전화번호
+    # 등)는 없다 — sites.yaml과 달리 익명화 없이 그대로 복사해도 된다.
+    SOURCE / "data" / "daily_briefing_latest.html",
 ]
 # Map_of_South_Korea-blank.svg는 카카오맵 전환 후 app.py/heatwave.py 어디서도
 # 더 이상 참조하지 않는 죽은 파일이라(2026-08-13 확인) 목록에서 뺐다 — 원본은

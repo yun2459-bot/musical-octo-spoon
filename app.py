@@ -609,8 +609,8 @@ st.title("현장 안전 통합 상황판")
 _mode = "🧪 LLM 하이브리드(파일럿)" if SEV_COL == "LLM심각도" else "📐 규칙기반(라벨)"
 st.caption(f"심각도 기준: **{_mode}** · 분석기간: {period_opt}")
 
-tab4, tab_disaster, tab1, tab2, tab3 = st.tabs(
-    ["🌡️ 폭염 대응", "🌪️ 자연재해 통합경보", "📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석"])
+tab4, tab_briefing, tab1, tab2, tab3 = st.tabs(
+    ["🌡️ 폭염 대응", "📰 일일 안전보건 브리핑", "📊 전사 현황", "🏢 지사 상세", "🔍 점검 편향분석"])
 
 # ================================================================== TAB4 폭염 대응
 with tab4:
@@ -1430,349 +1430,29 @@ with tab4:
                                 st.error("❌ 발송 실패: " + " / ".join(
                                     f"{f['name']}: {f['reason']}" for f in _send_result["failed"]))
 
-# ============================================================ TAB 자연재해 통합경보
-# 1단계(2026-08-07 표 -> 지도 배지로 승격): 폭염 외 11종 기상특보(태풍/호우/한파 등)를
-# 지사별 지도 위에 표시한다. 표 버전으로 지사×재해×등급 매칭이 실데이터로 맞는 것까지
-# 확인된 뒤 진행 — "사이트가 구축되고 효율적인지가 먼저"라는 사용자 판단에 따라 경보
-# 프로토콜(카카오 친구톡/RCS/에스컬레이션 등, [[project-disaster-alert-system-design]]
-# 참고)은 이 화면이 자리잡은 뒤로 미룬다. 폭염 대응(tab4)과 완전히 별개 탭 — 기존
-# 폭염 파이프라인/화면은 건드리지 않는다.
-#
-# 2026-08-10: 전사현황/지사상세/점검편향분석(tab1~3)과 같은 2차 비밀번호
-# (ANALYSIS_PASSWORD)로 같이 잠가달라는 요청 — 함수로 감싸서 본문 들여쓰기를
-# 안 건드리고 아래(함수 정의 뒤)에서 잠금 여부에 따라 호출하거나 게이트를
-# 보여주게 했다. 폭염 대응(tab4)은 계속 APP_PASSWORD만으로 열린다.
-def _render_disaster_tab():
-    st.subheader("🌪️ 자연재해 통합경보 (1단계 — 발효 현황)")
-    st.caption("기상청이 지금 발효 중인 특보(폭염 포함 12종)를 지사별로 모았습니다. "
-               "폭염 대응 탭과는 별개로, 태풍·호우·한파 등 다른 재해까지 확장한 화면입니다.")
 
-    _adv = HW.active_advisories_by_branch()
-    _kakao_key = st.secrets.get("KAKAO_JS_KEY", "")
-    _offices = HW.branch_office_coords()
-    # "특보가 갔다"보다 "지사가 점검한 결과"가 핵심이라는 요청(2026-08-10) —
-    # 지도에서 바로 구분되게 3단계로 테두리를 다르게 한다: 미점검(굵은 빨강) /
-    # 이상 발견(굵은 주황) / 정상 완료(흰색, 기본).
-    _checklist_status = HW.branch_checklist_status_today()
-
-    if not _kakao_key:
-        st.info("카카오맵 API 키(KAKAO_JS_KEY)가 secrets에 없어 지도를 표시할 수 없습니다.")
-    elif _offices.empty:
-        st.info("사업장 좌표가 없습니다. `config/sites.yaml`을 확인해주세요.")
+# ================================================================== TAB 일일 안전보건 브리핑
+# 2026-08-13 신설(자연재해 통합경보 탭 대체 — 배포 환경 동기화 문제가 반복돼
+# 사용자가 그 탭을 없애고 이걸로 바꿔달라고 요청). "온도를 조져보자/
+# daily_report.py"가 매일 만드는 뉴스+DART+판결문+날씨 통합 브리핑 이메일과
+# 완전히 같은 내용을 그대로 보여준다 — 대시보드가 직접 API/LLM을 호출하지
+# 않고 미리 만들어진 스냅샷(heatwave_data/daily_briefing_latest.html)만
+# 읽는다(비용 통제, 사용자 지적 반영). 폭염 대응(tab4)과 같은 수준으로
+# APP_PASSWORD만으로 열린다 — 연구용 원자료가 아니라 운영 화면이라 2차
+# 비밀번호(ANALYSIS_PASSWORD) 게이트는 걸지 않는다.
+with tab_briefing:
+    st.subheader("📰 일일 안전보건 브리핑")
+    st.caption("뉴스·DART 공시·판결문·날씨 특보를 종합한 안전보건관리책임자용 일일 브리핑입니다. "
+               "매일 자동 실행되는 온도를 조져보자/daily_report.py가 만든 최신 결과를 그대로 보여줍니다.")
+    _briefing_html, _briefing_mtime = HW.load_daily_briefing_html()
+    if not _briefing_html:
+        st.info("아직 생성된 브리핑이 없습니다. `온도를 조져보자` 프로젝트에서 daily_report.py가 "
+                "한 번 이상 실행된 뒤 sync_heatwave_data.py로 동기화되면 여기 표시됩니다.")
     else:
-        _by_branch = {b: g[["wrn_label", "level"]].to_dict("records")
-                      for b, g in _adv.groupby("branch")} if not _adv.empty else {}
-        _rank = {lvl: i for i, lvl in enumerate(HW.ADV_LEVEL_ORDER)}
-
-        def _disaster_marker(color: str, badge: str, label: str, badge_count: int = 1,
-                              label_side: str = "bottom", anchor_dx: int = 0,
-                              stroke_color: str = "white", stroke_width: float = 2):
-            """재해 지도 전용 마커 — 폭염 지도의 SVG 배지 기법을 그대로 쓰되, 추정치
-            점선이나 특보 사이렌 서브배지 같은 폭염 전용 장식은 없앤 단순 버전.
-
-            badge_count(동시 발효 재해 종류 수)가 늘어나면 이모지를 다 이어 붙인 배지가
-            원보다 커지므로, 그만큼 글자 크기를 줄여 원 안에 최대한 담는다.
-
-            label_side: "bottom"(기본)/"top"/"right". 경북·울산·부산은 동해안을 따라
-            세로로 촘촘히 붙어 기본(아래) 라벨이 서쪽(경남 방향) 마커를 가려서
-            "right"(바다 쪽)로 뺐다. 광양·삼천포·경남은 남해안에서 세 지사가 몰려
-            아래쪽끼리 겹쳐서(2026-08-10 피드백) 가운데(삼천포)만 "top"으로 바꿔
-            위/아래로 교차시켰다.
-
-            anchor_dx: 실제 좌표는 그대로 두고 화면에 그려지는 위치만 오른쪽으로
-            미세 이동(앵커 x를 그만큼 줄이면 이미지가 오른쪽으로 밀려 보인다) —
-            부산/울산/경북 원이 카카오맵 자체 지명 글자와 겹쳐 보인다는 피드백 반영.
-            """
-            d = 34
-            font_size = 13 if badge_count <= 1 else max(8, 13 - (badge_count - 1) * 3)
-            label_font = 10
-            label_w = max(d + 6, len(label) * 9 + 10)
-            label_h = 15
-            gap = 3
-            badge_e, label_e = html.escape(badge), html.escape(label)
-
-            if label_side == "right":
-                w, h = d + gap + label_w, max(d, label_h)
-                cx, cy = d / 2, h / 2
-                label_x, label_y = d + gap, (h - label_h) / 2
-            elif label_side == "top":
-                w, h = max(d, label_w), d + gap + label_h
-                cx, cy = w / 2, label_h + gap + d / 2
-                label_x, label_y = cx - label_w / 2, 0
-            else:
-                w, h = max(d, label_w), d + gap + label_h
-                cx, cy = w / 2, d / 2
-                label_x, label_y = cx - label_w / 2, d + gap
-            r = d / 2 - 1.5
-            svg = (
-                f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
-                f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" '
-                f'stroke="{stroke_color}" stroke-width="{stroke_width}"/>'
-                f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
-                f'font-size="{font_size}" font-weight="700" fill="white" '
-                f'font-family="sans-serif">{badge_e}</text>'
-                f'<rect x="{label_x}" y="{label_y}" width="{label_w}" height="{label_h}" '
-                f'rx="3" fill="white" fill-opacity="0.85"/>'
-                f'<text x="{label_x + label_w / 2}" y="{label_y + label_h / 2}" text-anchor="middle" '
-                f'dominant-baseline="central" font-size="{label_font}" font-weight="700" '
-                f'fill="#111" font-family="sans-serif">{label_e}</text>'
-                f'</svg>'
-            )
-            uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
-            return uri, round(w), round(h), round(cx - anchor_dx), round(cy)
-
-        # 배지에 숫자(동시 건수)만 있으면 무슨 재해인지 알려고 아래 표까지 내려가야
-        # 했다("경인 6"이 뭔지 안 보임, 2026-08-07 피드백) — 이모지+라벨에 재해명을
-        # 직접 박아 지도만 보고 바로 알 수 있게 바꿨다.
-        _WRN_EMOJI = {
-            "폭염": "🌡️", "호우": "🌧️", "태풍": "🌀", "강풍": "💨", "한파": "❄️",
-            "대설": "❄️", "건조": "🌵", "안개": "🌫️", "황사": "😷",
-            "지진해일": "🌊", "폭풍해일": "🌊",
-        }
-
-        # 동해안을 따라 경북(포항)·울산·부산이 위아래로 촘촘히 붙어 있어, 아래쪽으로
-        # 뻗는 기본 라벨이 서쪽(경남 방향)을 가린다는 피드백(2026-08-10) — 이 세
-        # 지사만 라벨을 오른쪽(바다 쪽)으로 돌린다.
-        # 남해안의 광양·삼천포·경남도 서로 몰려 있어 기본(아래) 라벨끼리 겹쳤다
-        # (2026-08-10 피드백) — 처음엔 삼천포만 위로 돌렸다가(아래/위/아래), 다시
-        # 광양 위/삼천포 아래/경남 위로 재조정.
-        _LABEL_SIDE_OVERRIDE = {
-            "경북": "right", "울산": "right", "부산": "right",
-            "광양": "top", "경남": "top", "경인": "top",
-        }
-        # 부산/울산/경북 원이 카카오맵 자체 지명 글자와 겹쳐 보인다는 피드백 —
-        # 실제 좌표는 그대로 두고 화면 렌더링 위치만 오른쪽으로 살짝 밀어준다
-        # (96dpi 기준 3mm ≈ 11px).
-        _ANCHOR_DX_OVERRIDE = {"경북": 11, "울산": 11, "부산": 11}
-
-        # 재해명만으론 "그래서 얼마나 심한지" 안 보인다는 피드백(2026-08-10) — 재해
-        # 종류별로 뜻이 통하는 실측치를 붙인다. 값이 없으면(관측지점에 그 센서가
-        # 없는 경우, 예: 포항 AWS는 강수 센서가 없어 rainfall_mm가 항상 NaN) 억지로
-        # 채우지 않고 재해명만 보여준다 — 없는 값을 지어내지 않는다.
-        _readings = HW.branch_latest_readings().set_index("branch") if not HW.branch_latest_readings().empty else pd.DataFrame()
-
-        def _hazard_value(wrn_label: str, branch: str) -> str:
-            if _readings.empty or branch not in _readings.index:
-                return ""
-            r = _readings.loc[branch]
-            if wrn_label == "폭염" and pd.notna(r.get("apparent_temp")):
-                return f" 체감{r['apparent_temp']:.1f}℃"
-            if wrn_label == "한파" and pd.notna(r.get("temperature")):
-                return f" {r['temperature']:.1f}℃"
-            if wrn_label == "호우" and pd.notna(r.get("rainfall_mm")):
-                return f" {r['rainfall_mm']:.0f}mm"
-            if wrn_label in ("강풍", "태풍") and pd.notna(r.get("wind_speed")):
-                return f" {r['wind_speed']:.1f}m/s"
-            return ""
-
-        _markers = []
-        for o in _offices.itertuples():
-            hazards = _by_branch.get(o.branch, [])
-            stroke_color, stroke_width = "white", 2
-            if hazards:
-                worst = max(hazards, key=lambda h: _rank.get(h["level"], -1))
-                color = HW.ADV_LEVEL_COLOR.get(worst["level"], "#888")
-                # 같은 재해가 지사 내 여러 도시·시간대에 걸쳐 여러 행으로 잡힐 수 있어
-                # (예: 경인 4개 도시 전부 폭염이면 4행) 종류 이름은 중복 제거한다 —
-                # 안 그러면 "폭염 +5종"처럼 실제로는 1종인데 여러 종인 것처럼 보인다.
-                distinct_names = sorted({h["wrn_label"] for h in hazards})
-                # 배지에 최고 등급 재해 하나만 보이면 "경북 폭염·호우인데 배지는 호우만"
-                # 처럼 동시 발효된 다른 종류가 묻힌다(2026-08-10 피드백) — 색은 최고
-                # 등급 기준으로 두되, 이모지는 발효 중인 종류 전부를 이어 붙인다.
-                badge = "".join(_WRN_EMOJI.get(n, "⚠️") for n in distinct_names)
-                names = "·".join(f"{n}{_hazard_value(n, o.branch)}" for n in distinct_names)
-                # 핵심은 "특보가 갔다"가 아니라 "지사가 점검한 결과"라는 요청
-                # (2026-08-10) — 3단계: 미점검(굵은 빨강+⏳) / 이상 발견(굵은
-                # 주황+🟠) / 정상 완료(흰 테두리+✅).
-                _status = _checklist_status.get(o.branch)
-                if _status == "정상":
-                    prefix, status_note = "✅ ", "오늘 점검 완료(정상)"
-                elif _status == "이상":
-                    prefix, stroke_color, stroke_width = "🟠 ", "#f2a154", 4
-                    status_note = "오늘 점검 완료(이상 발견)"
-                else:
-                    prefix, stroke_color, stroke_width = "⏳ ", "#c81d25", 4
-                    status_note = "점검 미완료"
-                label = f"{prefix}{o.branch} {names}"
-                title = f'{o.branch} · {names} ({worst["level"]} 등 {len(hazards)}건) · {status_note}'
-            else:
-                color, badge, label = HW.NORMAL_COLOR, "✅", o.branch
-                distinct_names = []
-                title = f'{o.branch} · 발효 중인 특보 없음'
-            img, w, h, ax, ay = _disaster_marker(
-                color, badge, label, badge_count=max(1, len(distinct_names)),
-                label_side=_LABEL_SIDE_OVERRIDE.get(o.branch, "bottom"),
-                anchor_dx=_ANCHOR_DX_OVERRIDE.get(o.branch, 0),
-                stroke_color=stroke_color, stroke_width=stroke_width)
-            _markers.append({"lat": o.lat, "lon": o.lon, "img": img, "w": w, "h": h,
-                              "ax": ax, "ay": ay, "title": title})
-
-        _markers_json = json.dumps(_markers, ensure_ascii=False).replace("</", "<\\/")
-        _map_html = f"""
-        <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
-        <div id="disasterMap" style="width:100%; height:650px; border-radius:8px;"></div>
-        <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={_kakao_key}&autoload=false"></script>
-        <script>
-        kakao.maps.load(function () {{
-            var container = document.getElementById('disasterMap');
-            var map = new kakao.maps.Map(container, {{
-                center: new kakao.maps.LatLng(36.2, 127.9), level: 12,
-            }});
-            map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
-            var markers = {_markers_json};
-            var bounds = new kakao.maps.LatLngBounds();
-            markers.forEach(function (m) {{
-                var pos = new kakao.maps.LatLng(m.lat, m.lon);
-                bounds.extend(pos);
-                var image = new kakao.maps.MarkerImage(
-                    m.img, new kakao.maps.Size(m.w, m.h), {{offset: new kakao.maps.Point(m.ax, m.ay)}});
-                new kakao.maps.Marker({{position: pos, map: map, image: image, title: m.title}});
-            }});
-            function fitMap() {{ map.relayout(); map.setBounds(bounds); }}
-            fitMap();
-            new ResizeObserver(fitMap).observe(container);
-        }});
-        </script>
-        """
-        # 범례를 지도 위로(2026-08-10 피드백) — 렌더링 순서만 바꾸면 되므로 지도
-        # components.html 호출보다 먼저 그린다. 회색 설명 캡션은 요청대로 없앴다.
-        _color_legend = [(HW.NORMAL_COLOR, "정상"), (HW.ADV_LEVEL_COLOR["주의보"], "주의보"),
-                          (HW.ADV_LEVEL_COLOR["경보"], "경보"), (HW.ADV_LEVEL_COLOR["중대경보"], "중대경보")]
-        _color_html = "".join(
-            f'<span style="display:inline-flex; align-items:center; margin-right:18px;">'
-            f'<span style="display:inline-block; width:10px; height:10px; border-radius:50%; '
-            f'background:{color}; margin-right:6px;"></span>{label}</span>'
-            for color, label in _color_legend
-        )
-        _icon_html = "".join(
-            f'<span style="display:inline-flex; align-items:center; margin-right:14px;">'
-            f'{emoji}&nbsp;{name}</span>'
-            for name, emoji in _WRN_EMOJI.items()
-        )
-        _check_html = (
-            '<span style="display:inline-flex; align-items:center; margin-right:14px;">'
-            '✅&nbsp;점검완료(정상)</span>'
-            '<span style="display:inline-flex; align-items:center; margin-right:14px;">'
-            '🟠&nbsp;점검완료(이상 발견, 테두리 주황)</span>'
-            '<span style="display:inline-flex; align-items:center;">'
-            '⏳&nbsp;점검 미완료(테두리 빨강)</span>'
-        )
-        st.markdown(
-            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:4px;">{_color_html}</div>'
-            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:4px; '
-            f'font-size:13px; color:#333;">{_icon_html}</div>'
-            f'<div style="display:flex; flex-wrap:wrap; align-items:center; margin-bottom:8px; '
-            f'font-size:13px; color:#333;">{_check_html}</div>',
-            unsafe_allow_html=True)
-        components.html(_map_html, height=665, scrolling=False)
-
-    st.markdown("---")
-    st.subheader("발효 현황 표")
-    if _adv.empty:
-        st.success("✅ 현재 발효 중인 특보가 없습니다.")
-    else:
-        _adv_display = _adv.rename(
-            columns={"branch": "지사", "city": "사업장", "wrn_label": "재해", "level": "등급"})
-
-        def _level_style(row: pd.Series) -> list[str]:
-            color = HW.ADV_LEVEL_COLOR.get(row["등급"], "#888")
-            return [f"background-color:{color}22" for _ in row]
-
-        st.dataframe(
-            _adv_display[["지사", "사업장", "재해", "등급"]].style.apply(_level_style, axis=1),
-            width="stretch", hide_index=True)
-
-        _summary = (_adv_display.groupby(["재해", "등급"]).size()
-                    .reset_index(name="건수").sort_values(["재해", "등급"]))
-        st.caption("종류별 발효 건수: " + ", ".join(
-            f"{r.재해} {r.등급} {r.건수}건" for r in _summary.itertuples()))
-
-    # ------------------------------------------------------- 폭염 위험수준 예보(2026-08-13)
-    # 위 "발효 현황 표"는 이미 뜬 특보만 보여준다 — 이 절은 아직 특보가 안 떴어도
-    # 내일 위험해질 수 있는지 미리 알려주는 예보성 지표(관심/주의/경고/위험,
-    # 오늘/내일). 기상청이 폭염·한파에 한해서만 제공하며, 지금은 폭염만 연동돼
-    # 있다(온도를 조져보자/src/impact_forecast.py 참고).
-    st.markdown("---")
-    st.subheader("🌡️ 폭염 위험수준 예보 (오늘·내일)")
-    _impact = HW.active_heat_impact_by_branch()
-    if _impact.empty:
-        st.info("현재 관심 단계 이상으로 예보된 지사가 없거나, 아직 예보가 수집되지 않았습니다 "
-                "(매일 11:30 발표 — 그 전에는 어제 발표분 기준 예보가 비어 있을 수 있습니다).")
-    else:
-        # 분야(산업/보건 등) 구분은 화면에서 뺀다(사용자 요청) — 지사×등급×날짜
-        # 기준으로만 중복 제거.
-        _impact_display = (
-            _impact.drop_duplicates(subset=["branch", "level", "forecast_day"])
-            .rename(columns={"branch": "지사", "level": "등급", "forecast_day": "예보일"})
-        )
-        _impact_display = _impact_display[["지사", "예보일", "등급"]].sort_values(
-            ["지사", "예보일"], key=lambda s: s.map({"오늘": 0, "내일": 1}) if s.name == "예보일" else s)
-
-        def _impact_style(row: pd.Series) -> list[str]:
-            color = HW.IMPACT_LEVEL_COLOR.get(row["등급"], "#888")
-            return [f"background-color:{color}22" for _ in row]
-
-        st.dataframe(_impact_display.style.apply(_impact_style, axis=1), width="stretch", hide_index=True)
-        st.caption("※ 이 예보는 기상청이 폭염·한파에 한해서만 제공합니다. 태풍·호우·대설 등 나머지 "
-                   "특보는 위 \"발효 현황 표\"처럼 이미 발효된 것만 확인할 수 있고, 미리 예보되지는 "
-                   "않습니다.")
-
-    # ------------------------------------------------------- 지사별 점검 체크리스트
-    # "특보가 갔다"가 아니라 "지사가 점검한 결과(항목별 정상/이상)"까지 통합
-    # 관리하는 게 핵심이라는 요청(2026-08-10) — 항목마다 정상/이상을 고르게 하고
-    # 제출하면 GitHub에 항목별로 기록(엑셀 일괄 사진 등록과 같은 방식,
-    # GITHUB_TOKEN 재사용)돼 지도 마커에 3단계(미점검/정상/이상)로 반영된다.
-    st.markdown("---")
-    st.subheader("✅ 지사별 점검 체크리스트")
-    _checklist = HW.branch_checklist_today()
-    _hazard_branches = sorted(_adv["branch"].unique()) if not _adv.empty else []
-    if not _hazard_branches:
-        st.success("발효 중인 특보가 없어 오늘은 점검이 필요한 지사가 없습니다.")
-    else:
-        _cl_branch = st.selectbox("지사 선택", _hazard_branches, key="_checklist_branch")
-        _cl_items = _checklist[_checklist["branch"] == _cl_branch] if not _checklist.empty else _checklist
-        _cl_status = HW.branch_checklist_status_today().get(_cl_branch)
-        if _cl_status == "이상":
-            st.error(f"🟠 {_cl_branch} 지사는 오늘 점검에서 이상 항목이 있었습니다.")
-        elif _cl_status == "정상":
-            st.success(f"✅ {_cl_branch} 지사는 오늘 점검 완료(전 항목 정상)로 기록돼 있습니다.")
-
-        if _cl_items.empty:
-            st.warning(f"{_cl_branch} 지사의 현재 특보에 대한 점검 항목이 아직 정의돼 있지 않습니다 "
-                       "(근거 자료 확인 전이라 항목을 임의로 만들지 않았습니다).")
-        else:
-            st.caption("항목별로 정상/이상을 고르고 이상이면 상세를 적어주세요. "
-                       "이미 오늘 점검 기록이 있어도 다시 제출하면 새 기록이 추가됩니다(이력 누적).")
-            _results = []
-            for r in _cl_items.itertuples():
-                st.markdown(f"**[{r.wrn_label}/{r.level}]** {r.label}  \n"
-                           f"<span style='color:#888; font-size:12px;'>근거: {r.source}</span>",
-                           unsafe_allow_html=True)
-                c1, c2 = st.columns([1, 3])
-                with c1:
-                    result = st.radio("결과", HW.CHECKLIST_RESULTS, horizontal=True,
-                                      key=f"_cl_result_{_cl_branch}_{r.item_id}", label_visibility="collapsed")
-                with c2:
-                    note = st.text_input("특이사항(이상일 때 상세 기재)",
-                                         key=f"_cl_note_{_cl_branch}_{r.item_id}", label_visibility="collapsed",
-                                         placeholder="이상일 때 상세 기재")
-                _results.append({"wrn_label": r.wrn_label, "level": r.level, "item_id": r.item_id,
-                                 "item_label": r.label, "result": result, "note": note})
-
-            _checked_by = st.text_input("담당자 이름", key=f"_checklist_name_{_cl_branch}")
-            if st.button(f"🔒 {_cl_branch} 지사 점검 결과 제출 ({len(_results)}개 항목)",
-                        key=f"_checklist_submit_{_cl_branch}", type="primary", disabled=not _checked_by.strip()):
-                with st.spinner("기록 중..."):
-                    HW.submit_checklist_results(_cl_branch, _checked_by.strip(), _results)
-                st.success("기록됐습니다. 지도가 곧 반영됩니다.")
-                st.rerun()
-
-
-with tab_disaster:
-    if _analysis_unlocked():
-        _render_disaster_tab()
-    else:
-        _analysis_gate("tab_disaster")
+        if _briefing_mtime is not None:
+            st.caption(f"🕒 이 스냅샷 동기화 시각: {_briefing_mtime.strftime('%Y-%m-%d %H:%M')} "
+                       "(브리핑 자체의 수집 기준 시각은 아래 본문 상단에 별도로 표시됩니다)")
+        components.html(_briefing_html, height=1400, scrolling=True)
 
 
 # ------------------------------------------------------- 분석 탭 2차 비밀번호 게이트

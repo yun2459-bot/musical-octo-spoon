@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><style>
+body { font-family: -apple-system, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+       background:#f4f5f7; margin:0; padding:24px; color:#1f2937; }
+.container { max-width:640px; margin:0 auto; background:#fff; border-radius:12px;
+             overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08); }
+.header { background:#0f172a; color:#fff; padding:20px 24px; }
+.header h1 { margin:0; font-size:18px; }
+.header .date { opacity:0.7; font-size:13px; margin-top:4px; }
+.section { padding:18px 24px; border-top:1px solid #eee; }
+.section h2 { font-size:15px; margin:0 0 10px; color:#0f172a; }
+.note { padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:10px; }
+.note.delay { background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; }
+.note.unavailable { background:#f3f4f6; color:#6b7280; border:1px solid #e5e7eb; }
+.note.info { background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe; }
+.empty { color:#9ca3af; font-size:13px; }
+ul.items { list-style:none; margin:0; padding:0; }
+ul.items li { padding:8px 0; border-bottom:1px solid #f3f4f6; font-size:13px; line-height:1.6; }
+ul.items li:last-child { border-bottom:none; }
+.badge { display:inline-block; background:#fee2e2; color:#991b1b; padding:2px 8px;
+         border-radius:4px; font-size:12px; font-weight:600; margin-right:8px; }
+.tag { display:inline-block; background:#e0e7ff; color:#3730a3; padding:2px 8px;
+       border-radius:4px; font-size:12px; font-weight:600; margin-right:8px; }
+.meta { color:#9ca3af; font-size:12px; display:block; margin-top:2px; }
+.meta.issue { color:#4b5563; font-size:13px; line-height:1.5; margin-top:6px; }
+.ai-box { background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px;
+          padding:8px 10px; margin-top:8px; }
+.ai-box p { color:#166534; font-size:13px; line-height:1.6; margin:4px 0 0; }
+.ai-box p:first-of-type { margin-top:6px; }
+.ai-tag { display:inline-block; background:#dcfce7; color:#166534; font-size:10px; font-weight:700;
+          padding:1px 5px; border-radius:3px; vertical-align:middle; }
+a { color:#2563eb; text-decoration:none; }
+a:hover { text-decoration:underline; }
+table.branch-table { width:100%; border-collapse:collapse; font-size:13px; }
+table.branch-table th { text-align:left; padding:6px 8px; color:#6b7280; font-weight:600;
+                         font-size:12px; border-bottom:2px solid #e5e7eb; }
+table.branch-table td { padding:8px; border-bottom:1px solid #f3f4f6; vertical-align:top; }
+table.branch-table tr:last-child td { border-bottom:none; }
+.ok { color:#16a34a; font-size:13px; }
+.impact-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px;
+                 font-weight:600; margin:2px 4px 2px 0; }
+/* 기상청 폭염 위험수준 공식 범례 색(관심=파랑/주의=노랑/경고=주황/위험=빨강) */
+.impact-attention { background:#dbeafe; color:#1e40af; }
+.impact-caution { background:#fef9c3; color:#854d0e; }
+.impact-warning { background:#fed7aa; color:#9a3412; }
+.impact-danger { background:#fecaca; color:#991b1b; }
+.impact-note { margin-top:10px; }
+</style></head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>세방(주) 안전보건 일일 브리핑</h1>
+    <div class="date">2026-08-13 10:47 기준</div>
+  </div>
+  <div class="section"><h2>카테고리 뉴스</h2><div class="note delay">[수집 지연] 오늘 뉴스 API 호출 한도(20건) 소진 — 다음 실행에서 재시도</div></div><div class="section"><h2>지사별 날씨 환경</h2><table class="branch-table"><thead><tr><th>지사</th><th>발효 특보</th><th>점검 항목</th><th>폭염 위험수준 예보</th></tr></thead><tbody><tr><td>경인</td><td><span class="badge">폭염 주의보</span></td><td>· 물 상시 비치·보충 정상<br>· 그늘막/송풍 시설 정상 가동<br>· 휴게시설 운영·휴식 부여 정상<br>· 응급키트 정상 비치·TBM 매일 실시<br>· 온열질환 민감군(질환 경험자·신규자 등) 관리</td><td><span class="impact-badge impact-attention">오늘 관심</span> <span class="impact-badge impact-caution">오늘 주의</span> <span class="impact-badge impact-caution">내일 주의</span></td></tr><tr><td>광양, 부산, 경남, 울산</td><td><span class="badge">폭염 주의보</span></td><td>· 물 상시 비치·보충 정상<br>· 그늘막/송풍 시설 정상 가동<br>· 휴게시설 운영·휴식 부여 정상<br>· 응급키트 정상 비치·TBM 매일 실시<br>· 온열질환 민감군(질환 경험자·신규자 등) 관리</td><td><span class="impact-badge impact-caution">오늘 주의</span> <span class="impact-badge impact-caution">내일 주의</span></td></tr><tr><td>전북</td><td><span class="ok">특보 없음</span></td><td><span class="meta">-</span></td><td><span class="impact-badge impact-caution">오늘 주의</span> <span class="impact-badge impact-caution">내일 주의</span></td></tr><tr><td>강원, 제주</td><td><span class="ok">특보 없음</span></td><td><span class="meta">-</span></td><td><span class="meta">-</span></td></tr><tr><td>경북, 목포, 삼천포</td><td><span class="ok">특보 없음</span></td><td><span class="meta">-</span></td><td><span class="impact-badge impact-attention">오늘 관심</span> <span class="impact-badge impact-attention">내일 관심</span></td></tr><tr><td>당진</td><td><span class="ok">특보 없음</span></td><td><span class="meta">-</span></td><td><span class="impact-badge impact-attention">오늘 관심</span> <span class="impact-badge impact-caution">내일 주의</span></td></tr></tbody></table><p class="meta impact-note">※ 이 위험수준 예보는 기상청이 폭염·한파에 한해서만 제공합니다. 태풍·호우·대설 등 나머지 특보는 위 "발효 특보" 칸처럼 이미 발효된 것만 확인할 수 있고, 미리 예보되지는 않습니다.</p></div><div class="section"><h2>DART 공시</h2><ul class="items"><li><span class="tag">KCC건설</span><a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260812900989" target="_blank" rel="noopener">[기재정정]중대재해발생</a><span class="meta">접수일 20260812</span></li></ul></div><div class="section"><h2>판결문</h2><div class="note delay">[수집 지연] 45초 타임아웃</div></div>
+</div>
+</body></html>

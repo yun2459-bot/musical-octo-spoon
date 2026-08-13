@@ -21,8 +21,11 @@ FILES = [
     SOURCE / "data" / "alerts.db",
     SOURCE / "config" / "sites.yaml",
     SOURCE / "config" / "checklist_pool.yaml",  # 재해별 점검항목 풀(2026-08-10) — PII 없음, 그대로 복사
-    SOURCE / "Map_of_South_Korea-blank.svg",
 ]
+# Map_of_South_Korea-blank.svg는 카카오맵 전환 후 app.py/heatwave.py 어디서도
+# 더 이상 참조하지 않는 죽은 파일이라(2026-08-13 확인) 목록에서 뺐다 — 원본은
+# 온도를 조져보자/docs/참고자료/로 옮겨져 있다. heatwave_data/의 예전 사본은
+# 남겨둬도 무해하니 그대로 둔다.
 
 # 010-1234-5678 / 01012345678 등 휴대폰번호로 보이는 패턴 — sites.yaml을 이 public
 # 저장소로 복사하기 직전 마지막 안전장치로 쓴다. 지금은 recipients 필드 하나만

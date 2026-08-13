@@ -206,6 +206,38 @@ def active_advisories_by_branch() -> pd.DataFrame:
     return merged[cols].sort_values(["branch", "city"]).reset_index(drop=True)
 
 
+# 폭염/한파 영향예보(관심/주의/경고/위험, 오늘/내일) — 2026-08-13 추가. 위 특보
+# (지금 발효된 것만 "떴다/안 떴다")와 달리, 아직 특보가 안 떴어도 내일 위험해질
+# 수 있는지 미리 알려주는 예보성 지표다(사용자 요청: "특보가 아직 안 떴어도
+# '내일 위험해질 수 있다'를 먼저 알려주는 게 내가 기상에서 원하는 것"). 현재
+# 기상청이 폭염·한파 두 가지만 제공하며(2026-08-13 확인), 이 대시보드는 아직
+# 폭염만 조회한다(온도를 조져보자/src/impact_forecast.py, main.py 참고).
+IMPACT_LEVEL_ORDER = ["관심", "주의", "경고", "위험"]
+IMPACT_LEVEL_COLOR = {"관심": "#3b82f6", "주의": "#eab308", "경고": "#f97316", "위험": "#dc2626"}
+
+
+def active_heat_impact_by_branch() -> pd.DataFrame:
+    """폭염 위험수준 예보(오늘/내일)를 지사·도시 단위로 매칭해 반환.
+    active_advisories_by_branch()와 완전히 같은 방식(region_id 매칭, heat_impact
+    테이블도 main.py가 매 주기 통째로 교체하는 스냅샷)."""
+    cols = ["branch", "city", "region_id", "field", "level", "forecast_day"]
+    cities = load_branch_cities()
+    if cities.empty or "region_id" not in cities.columns:
+        return pd.DataFrame(columns=cols)
+    try:
+        with _connect() as conn:
+            imp = pd.read_sql("SELECT * FROM heat_impact", conn)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if imp.empty:
+        return pd.DataFrame(columns=cols)
+    merged = cities.dropna(subset=["region_id"])[["branch", "city", "region_id"]].merge(
+        imp, on="region_id", how="inner")
+    if merged.empty:
+        return pd.DataFrame(columns=cols)
+    return merged[cols].sort_values(["branch", "city"]).reset_index(drop=True)
+
+
 # ------------------------------------------------------------- 재해별 점검 체크리스트
 # "특보가 갔다"가 아니라 "지사가 그에 맞춰 점검을 마쳤다"까지 관리하는 게 이
 # 화면의 핵심이라는 요청(2026-08-10)에 따라 추가. AI/자동화가 즉흥적으로 점검

@@ -1687,6 +1687,36 @@ def _render_disaster_tab():
         st.caption("종류별 발효 건수: " + ", ".join(
             f"{r.재해} {r.등급} {r.건수}건" for r in _summary.itertuples()))
 
+    # ------------------------------------------------------- 폭염 위험수준 예보(2026-08-13)
+    # 위 "발효 현황 표"는 이미 뜬 특보만 보여준다 — 이 절은 아직 특보가 안 떴어도
+    # 내일 위험해질 수 있는지 미리 알려주는 예보성 지표(관심/주의/경고/위험,
+    # 오늘/내일). 기상청이 폭염·한파에 한해서만 제공하며, 지금은 폭염만 연동돼
+    # 있다(온도를 조져보자/src/impact_forecast.py 참고).
+    st.markdown("---")
+    st.subheader("🌡️ 폭염 위험수준 예보 (오늘·내일)")
+    _impact = HW.active_heat_impact_by_branch()
+    if _impact.empty:
+        st.info("현재 관심 단계 이상으로 예보된 지사가 없거나, 아직 예보가 수집되지 않았습니다 "
+                "(매일 11:30 발표 — 그 전에는 어제 발표분 기준 예보가 비어 있을 수 있습니다).")
+    else:
+        # 분야(산업/보건 등) 구분은 화면에서 뺀다(사용자 요청) — 지사×등급×날짜
+        # 기준으로만 중복 제거.
+        _impact_display = (
+            _impact.drop_duplicates(subset=["branch", "level", "forecast_day"])
+            .rename(columns={"branch": "지사", "level": "등급", "forecast_day": "예보일"})
+        )
+        _impact_display = _impact_display[["지사", "예보일", "등급"]].sort_values(
+            ["지사", "예보일"], key=lambda s: s.map({"오늘": 0, "내일": 1}) if s.name == "예보일" else s)
+
+        def _impact_style(row: pd.Series) -> list[str]:
+            color = HW.IMPACT_LEVEL_COLOR.get(row["등급"], "#888")
+            return [f"background-color:{color}22" for _ in row]
+
+        st.dataframe(_impact_display.style.apply(_impact_style, axis=1), width="stretch", hide_index=True)
+        st.caption("※ 이 예보는 기상청이 폭염·한파에 한해서만 제공합니다. 태풍·호우·대설 등 나머지 "
+                   "특보는 위 \"발효 현황 표\"처럼 이미 발효된 것만 확인할 수 있고, 미리 예보되지는 "
+                   "않습니다.")
+
     # ------------------------------------------------------- 지사별 점검 체크리스트
     # "특보가 갔다"가 아니라 "지사가 점검한 결과(항목별 정상/이상)"까지 통합
     # 관리하는 게 핵심이라는 요청(2026-08-10) — 항목마다 정상/이상을 고르게 하고

@@ -21,12 +21,12 @@ FILES = [
     SOURCE / "data" / "alerts.db",
     SOURCE / "config" / "sites.yaml",
     SOURCE / "config" / "checklist_pool.yaml",  # 재해별 점검항목 풀(2026-08-10) — PII 없음, 그대로 복사
-    # 일일 안전보건 브리핑(뉴스+DART+판결문+날씨) 최신 스냅샷(2026-08-13 추가) —
-    # "📰 일일 안전보건 브리핑" 탭이 그대로 읽어서 보여준다. 뉴스 제목/URL,
-    # DART 공시, 판례 사건명/URL, 특보만 담겨 있고 개인정보(수신자 이름·전화번호
-    # 등)는 없다 — sites.yaml과 달리 익명화 없이 그대로 복사해도 된다.
-    SOURCE / "data" / "daily_briefing_latest.html",
 ]
+# 일일 안전보건 브리핑(뉴스+DART+판결문+날씨) 스냅샷은 2026-08-20부터 여기서 뺐다 —
+# HeatwaveCycle 주기에 얹혀 있으면 그 스케줄러가 지연될 때 브리핑까지 같이 밀리는
+# 문제가 실측으로 확인돼(2026-08-20), daily_report.py가 발송 직후 직접 호출하는
+# sync_daily_briefing.py로 분리했다. 이 파일은 이제 폭염 관측 데이터(alerts.db/
+# sites.yaml/checklist_pool.yaml)만 담당한다.
 # Map_of_South_Korea-blank.svg는 카카오맵 전환 후 app.py/heatwave.py 어디서도
 # 더 이상 참조하지 않는 죽은 파일이라(2026-08-13 확인) 목록에서 뺐다 — 원본은
 # 온도를 조져보자/docs/참고자료/로 옮겨져 있다. heatwave_data/의 예전 사본은

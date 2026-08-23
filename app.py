@@ -1581,14 +1581,19 @@ with tab2:
     cA, cB = st.columns([1, 2])
     with cA:
         val = float(rrow["위험지수"])
+        # 지사명을 별도 title(게이지 위쪽)로 두지 않고 number 블록 안에 작은 글씨로 얹어서
+        # 게이지 호(arc)의 정중앙(숫자가 표시되는 지점)에 오도록 함.
         gfig = go.Figure(go.Indicator(
-            mode="gauge+number", value=val, title={"text": f"{sel} 위험·활동 지수"},
+            mode="gauge+number", value=val,
+            number={"font": {"size": 34},
+                    "prefix": f"<span style='font-size:0.42em;color:#3B4551'>{sel}</span><br>"},
             gauge={"axis": {"range": [0, 100]},
                    "bar": {"color": CHART_ACCENT},
                    "steps": [{"range": [0, 50], "color": "#F2F3F3"},
                              {"range": [50, 80], "color": SEBANG_LIGHT_GRAY_1},
                              {"range": [80, 100], "color": SEBANG_LIGHT_GRAY_2}]}))
-        gfig.update_layout(height=260, margin=dict(l=10, r=10, t=50, b=10))
+        gfig.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10))
+        st.caption("위험·활동 지수")
         st.plotly_chart(gfig, width="stretch")
         st.caption(f"점검 {int(rrow['지적건수'])}건 · 평균 심각도 {rrow['평균심각도']:.2f} · "
                    f"사업장 {int(rrow['사업장수'])}곳 · 안전관리자 {int(rrow['안전관리자수'])}명")

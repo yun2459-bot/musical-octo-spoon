@@ -81,16 +81,21 @@ log("="*70)
 _using_accum = (F_INSP == _RAW_ACCUM)
 insp = pd.read_excel(F_INSP, header=0 if _using_accum else 1)
 insp = insp[insp["코칭부서"].notna()].copy()
-# '지사'는 조치부서(실제 시정조치가 필요한 대상 지사) 기준으로 정한다 — 코칭부서(코칭 수행자 소속)로
-# 정하면 CSO EHS팀/그룹합동안전점검TF처럼 본사 조직이 지사를 대신 코칭한 건이 엉뚱하게 잡히거나
-# (그 조직명이 '지사'로 노출) 아예 누락된다. 조치부서 기준이면 두 경우 모두 실제 대상 지사로 정확히 귀속된다.
+# [2026-08-24 기준 갱신] '지사 자체 점검'은 코칭부서(누가 점검했나)와 조치부서(어느 지사
+# 소관인가)가 '같은 지사'로 일치하는 행만으로 정의한다. 그룹합동안전점검TF/CSO EHS팀처럼
+# 본사 조직이 여러 지사를 순회하며 코칭한 건(코칭부서=CSO EHS팀 ≠ 조치부서=개별지사)은
+# 조치부서만 보면 마치 그 지사 안전관리자가 스스로 점검한 것처럼 보이지만 실제로는 본사
+# 합동점검 활동이다 — 다양성지수·편향분석은 '그 지사 안전관리자 본인의 점검 습관'을
+# 재는 지표이므로, 이런 본사 주도 건을 섞으면 지사 고유의 편향 신호가 왜곡된다.
+# (이전 결정: 조치부서만으로 귀속 → 이번 결정으로 대체. docs/RESEARCH_METHODOLOGY_LOG.md 참고)
 _before_dept_filter = len(insp)
 insp = insp[
     (insp["점검유형"] == "지사 주관")
+    & (insp["코칭부서"] == insp["조치부서"])
     & insp["조치부서"].astype(str).str.match(r"^[가-힣]{2,3}지사$")
 ].copy()
 if _before_dept_filter != len(insp):
-    log(f" 지사주관/조치부서=OO지사 조건 불일치 제외: {_before_dept_filter} → {len(insp)}행")
+    log(f" 지사주관/코칭부서=조치부서(자체점검) 조건 불일치 제외: {_before_dept_filter} → {len(insp)}행")
 log(f" 원본 유효행: {len(insp)}")
 
 # 컬럼 정리/리네임

@@ -548,11 +548,6 @@ sev_label = st.sidebar.radio(
     help="LLM 하이브리드는 195건 직접 의미판정 + 590건 키워드 맥락보정을 결합한 파일럿 결과입니다.")
 SEV_COL = SEV_COL_MAP[sev_label]
 
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    f"데이터: 점검 {len(insp):,}건 ({insp['점검일자'].min().date()}~{insp['점검일자'].max().date()}) · "
-    f"인적재해 이력 {int((acc['재해성격']=='인적재해').sum()):,}건")
-
 SYNC_SUMMARY_PATH = Path(__file__).parent / "data" / "_last_sync_summary.json"
 
 # gsafety.kr 로그인 자격증명이 있는 로컬 환경에서만 동기화 버튼을 보여준다.
